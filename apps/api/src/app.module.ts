@@ -9,6 +9,8 @@ import { ErrorsFilter } from './common/errors.filter.js';
 import { requestId } from './common/request-id.js';
 import { type Env, validateEnv } from './config/env.js';
 import { typeormOptions } from './database/typeorm-options.js';
+import { FriendsController } from './friends/friends.controller.js';
+import { FriendsService } from './friends/friends.service.js';
 import { DirectController, GroupsController } from './groups/groups.controller.js';
 import { GroupsService } from './groups/groups.service.js';
 import { GroupMembersController, InviteLinksController } from './groups/invites.controller.js';
@@ -58,6 +60,7 @@ import { UsersService } from './users/users.service.js';
     DirectController,
     GroupMembersController,
     InviteLinksController,
+    FriendsController,
   ],
   providers: [
     UsersService,
@@ -65,6 +68,7 @@ import { UsersService } from './users/users.service.js';
     GroupsService,
     InvitesService,
     MembersService,
+    FriendsService,
     {
       provide: JWKS,
       inject: [ConfigService],

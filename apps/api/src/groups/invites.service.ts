@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   GoneException,
@@ -15,12 +16,16 @@ import type {
   InviteResponse,
 } from '@speaksplit/api-types';
 import { DataSource, type EntityManager } from 'typeorm';
+import { eitherBlocked } from '../common/blocks.js';
 import type { Env } from '../config/env.js';
 import { Group, GroupMember, Invite, User } from '../database/entities/index.js';
+import { areFriends, befriend } from '../friends/friendship.js';
 import { audit } from './members.service.js';
 
 /** Enough for any real group; stops a runaway client. */
 export const MAX_ACTIVE_INVITES = 20;
+/** Personal "add me as a friend" links a user can have active at once. */
+export const MAX_ACTIVE_FRIEND_INVITES = 10;
 
 export function hashToken(token: string): Buffer {
   return createHash('sha256').update(token).digest();
@@ -67,6 +72,7 @@ export class InvitesService {
       const token = randomBytes(32).toString('base64url');
       const invite = await tx.getRepository(Invite).save(
         tx.getRepository(Invite).create({
+          kind: 'group',
           groupId,
           tokenHash: hashToken(token),
           placeholderMemberId: placeholder?.id ?? null,
@@ -76,13 +82,77 @@ export class InvitesService {
           expiresAt: new Date(Date.now() + input.expiresInHours * 3_600_000),
         }),
       );
-      const base = this.config.get('PUBLIC_APP_URL', { infer: true });
-      return {
-        ...toResponse(invite, user.name, placeholder),
-        token,
-        url: base ? new URL(`/join/${token}`, base).toString() : null,
-      };
+      return { ...toResponse(invite, user.name, placeholder), ...this.link(token) };
     });
+  }
+
+  /** A personal "add me as a friend" link: whoever accepts it becomes the creator's friend. */
+  async createFriendInvite(
+    user: User,
+    input: { maxUses?: number | undefined; expiresInHours: number },
+  ): Promise<InviteResponse> {
+    return this.db.transaction(async (tx) => {
+      await tx.query('select 1 from users where id = $1 for update', [user.id]);
+      const [active] = await tx.query<Array<{ n: number }>>(
+        `select count(*)::int as n from invites
+         where kind = 'friend' and created_by = $1 and revoked_at is null and expires_at > now()
+           and (max_uses is null or use_count < max_uses)`,
+        [user.id],
+      );
+      if ((active?.n ?? 0) >= MAX_ACTIVE_FRIEND_INVITES) {
+        throw new ConflictException({
+          code: 'limit',
+          message: `At most ${MAX_ACTIVE_FRIEND_INVITES} active friend links; revoke some first`,
+        });
+      }
+      const token = randomBytes(32).toString('base64url');
+      const invite = await tx.getRepository(Invite).save(
+        tx.getRepository(Invite).create({
+          kind: 'friend',
+          groupId: null,
+          tokenHash: hashToken(token),
+          createdBy: user.id,
+          maxUses: input.maxUses ?? null,
+          useCount: 0,
+          expiresAt: new Date(Date.now() + input.expiresInHours * 3_600_000),
+        }),
+      );
+      return { ...toResponse(invite, user.name, null), ...this.link(token) };
+    });
+  }
+
+  async listFriendInvites(user: User): Promise<InviteResponse[]> {
+    const rows = await this.db.query<Invite[]>(
+      `select id, expires_at as "expiresAt", max_uses as "maxUses", use_count as "useCount",
+              created_by as "createdBy", created_at as "createdAt"
+       from invites
+       where kind = 'friend' and created_by = $1 and revoked_at is null and expires_at > now()
+         and (max_uses is null or use_count < max_uses)
+       order by created_at desc`,
+      [user.id],
+    );
+    return rows.map((r) => toResponse(r, user.name, null));
+  }
+
+  async revokeFriendInvite(user: User, inviteId: string): Promise<void> {
+    const result = UUID.test(inviteId)
+      ? await this.db
+          .getRepository(Invite)
+          .createQueryBuilder()
+          .update()
+          .set({ revokedAt: () => 'now()' })
+          .where(`id = :inviteId and kind = 'friend' and created_by = :me and revoked_at is null`, {
+            inviteId,
+            me: user.id,
+          })
+          .execute()
+      : { affected: 0 };
+    if (!result.affected) throw new NotFoundException('Invite not found');
+  }
+
+  private link(token: string): { token: string; url: string | null } {
+    const base = this.config.get('PUBLIC_APP_URL', { infer: true });
+    return { token, url: base ? new URL(`/join/${token}`, base).toString() : null };
   }
 
   /** Invites that can still be used (no tokens: those were shown once, at creation). */
@@ -126,8 +196,19 @@ export class InvitesService {
   /** What the invite is for, so the person can decide before joining. */
   async preview(token: string, user: User): Promise<InvitePreview> {
     const invite = await this.usable(this.db.manager, token);
-    const group = await this.db.getRepository(Group).findOneByOrFail({ id: invite.groupId });
     const inviter = await this.db.getRepository(User).findOneByOrFail({ id: invite.createdBy });
+    if (invite.kind === 'friend') {
+      return {
+        kind: 'friend',
+        group: null,
+        invitedBy: inviter.name,
+        placeholderName: null,
+        expiresAt: invite.expiresAt.toISOString(),
+        alreadyMember:
+          inviter.id === user.id || (await areFriends(this.db.manager, inviter.id, user.id)),
+      };
+    }
+    const group = await this.db.getRepository(Group).findOneByOrFail({ id: invite.groupId! });
     const [count] = await this.db.query<Array<{ n: number }>>(
       'select count(*)::int as n from group_members where group_id = $1 and left_at is null',
       [group.id],
@@ -139,6 +220,7 @@ export class InvitesService {
       ? await this.db.getRepository(GroupMember).findOneBy({ id: invite.placeholderMemberId })
       : null;
     return {
+      kind: 'group',
       group: { id: group.id, name: group.name, type: group.type, memberCount: count?.n ?? 0 },
       invitedBy: inviter.name,
       placeholderName: placeholder?.placeholderName ?? null,
@@ -155,16 +237,12 @@ export class InvitesService {
   async accept(token: string, user: User, requestId: string): Promise<AcceptInviteResponse> {
     return this.db.transaction(async (tx) => {
       const invite = await this.usable(tx, token, true);
-      const group = await tx.getRepository(Group).findOneByOrFail({ id: invite.groupId });
+      if (invite.kind === 'friend') return this.acceptFriend(tx, invite, user);
+      const group = await tx.getRepository(Group).findOneByOrFail({ id: invite.groupId! });
       if (group.archivedAt) {
         throw new ConflictException({ code: 'archived', message: 'This group is archived' });
       }
-      const blocked = await tx.query<unknown[]>(
-        `select 1 from blocks
-         where (blocker_id = $1 and blocked_id = $2) or (blocker_id = $2 and blocked_id = $1)`,
-        [user.id, invite.createdBy],
-      );
-      if (blocked.length > 0) {
+      if (await eitherBlocked(tx, user.id, invite.createdBy)) {
         throw new ForbiddenException({
           code: 'blocked',
           message: "You can't join through this invite",
@@ -174,7 +252,7 @@ export class InvitesService {
       const members = tx.getRepository(GroupMember);
       const existing = await members.findOneBy({ groupId: group.id, userId: user.id });
       if (existing && !existing.leftAt) {
-        return { groupId: group.id, memberId: existing.id, outcome: 'already' };
+        return groupResult(group.id, existing.id, 'already');
       }
 
       let outcome: AcceptInviteResponse['outcome'];
@@ -232,8 +310,32 @@ export class InvitesService {
           inviteId: invite.id,
         },
       );
-      return { groupId: group.id, memberId, outcome };
+      return groupResult(group.id, memberId, outcome);
     });
+  }
+
+  private async acceptFriend(
+    tx: EntityManager,
+    invite: Invite,
+    user: User,
+  ): Promise<AcceptInviteResponse> {
+    const result = (outcome: 'befriended' | 'already'): AcceptInviteResponse => ({
+      kind: 'friend',
+      groupId: null,
+      memberId: null,
+      friendUserId: invite.createdBy,
+      outcome,
+    });
+    if (invite.createdBy === user.id) {
+      throw new BadRequestException({ code: 'self', message: 'This is your own link' });
+    }
+    if (await eitherBlocked(tx, user.id, invite.createdBy)) {
+      throw new ForbiddenException({ code: 'blocked', message: "You can't use this invite" });
+    }
+    if (await areFriends(tx, user.id, invite.createdBy)) return result('already');
+    await befriend(tx, invite.createdBy, user.id, 'invite');
+    await tx.getRepository(Invite).increment({ id: invite.id }, 'useCount', 1);
+    return result('befriended');
   }
 
   /** Finds an invite by token; 404 if unknown, 410 if expired, revoked or used up. */
@@ -260,8 +362,18 @@ export class InvitesService {
   }
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function groupResult(
+  groupId: string,
+  memberId: string,
+  outcome: 'joined' | 'rejoined' | 'claimed' | 'already',
+): AcceptInviteResponse {
+  return { kind: 'group', groupId, memberId, friendUserId: null, outcome };
+}
+
 function toResponse(
-  invite: Invite,
+  invite: Pick<Invite, 'id' | 'expiresAt' | 'maxUses' | 'useCount' | 'createdBy' | 'createdAt'>,
   createdByName: string,
   placeholder: GroupMember | null,
 ): InviteResponse {

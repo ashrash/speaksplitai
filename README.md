@@ -50,15 +50,18 @@ Priority: **MVP** = first release, **Next** = soon after, **Later** = backlog.
 
 ### Groups and people
 
-| Feature                                                                                 | Priority |
-| --------------------------------------------------------------------------------------- | -------- |
-| Groups (trip, flat, couple, friends, event) with their own balances; archive and delete | MVP      |
-| Friend-to-friend expenses outside any group                                             | MVP      |
-| Invites by WhatsApp link, phone number or email                                         | MVP      |
-| Add and remove members (blocked while they have a non-zero balance)                     | MVP      |
-| Roles (owner, admin, member), leaving a group                                           | Next     |
-| Placeholder members: add someone by name, and they claim it when they sign up           | Next     |
-| Block and unblock users                                                                 | Next     |
+| Feature                                                                                            | Priority |
+| -------------------------------------------------------------------------------------------------- | -------- |
+| Groups (trip, flat, couple, friends, event) with their own balances; archive and delete            | MVP      |
+| Friend-to-friend expenses outside any group                                                        | MVP      |
+| Invites by WhatsApp link, phone number or email                                                    | MVP      |
+| Add and remove members (blocked while they have a non-zero balance)                                | MVP      |
+| Roles (owner, admin, member), leaving a group                                                      | Next     |
+| Placeholder members: add someone by name, and they claim it when they sign up                      | MVP      |
+| Friends list: explicit friends plus everyone you share a group with                                | MVP      |
+| Add a friend by personal invite link, or by request (accept / decline)                             | MVP      |
+| Add a friend by email or phone without revealing who is registered (phone once SMS sign-in exists) | MVP      |
+| Block and unblock users                                                                            | Next     |
 
 ### Balances and history
 
@@ -136,7 +139,8 @@ stored as editable numbers.
 | `expense_items`, `expense_item_assignments` | Receipt line items and who shares each one                                                                                                                      |
 | `settlements`                               | Payments between members: the debt cleared (amount + currency), and what was actually sent if it was another currency; UPI only in INR                          |
 | `recurring_expenses`                        | Schedules that generate expenses                                                                                                                                |
-| `invites`, `blocks`                         | Invite links (hashed tokens) and user blocks                                                                                                                    |
+| `invites`, `blocks`                         | Group and friend invite links (hashed tokens) and user blocks                                                                                                   |
+| `friendships`, `friend_requests`            | Explicit friends (one row per pair), and requests to a user, an email or a phone                                                                                |
 | `attachments`, `comments`                   | Receipts and payment proofs (in S3); comments on expenses                                                                                                       |
 | `push_tokens`                               | Device tokens for notifications                                                                                                                                 |
 | `audit_log`                                 | Append-only history, also the activity feed                                                                                                                     |
@@ -233,6 +237,8 @@ pnpm test:int                           # database integration tests; needs TEST
   - [x] Groups: create, list, view, rename (optimistic locking), default currency, archive,
         delete when settled
   - [x] Friend-to-friend groups (expenses in them come with the expense endpoints)
+  - [x] Friends: list, personal invite links, requests by user / email / phone (accept, decline,
+        cancel), unfriend; verified email synced from Auth0
   - [x] Invite links (expiry, use limits, revoke); join, rejoin, placeholder members; remove and
         leave (blocked while they have a balance; owners can't leave until ownership transfer exists)
   - [ ] Expenses: create, edit, delete, with audit history

@@ -93,7 +93,11 @@ Priority: **P0** = MVP, **P1** = next, **P2** = later.
 | FR-27 | **Block users:** a blocked user cannot invite me, add me to groups, or send me requests or reminders. Existing shared history is preserved. | P1 |
 | FR-28 | **Unblock** users and view a block list. | P1 |
 | FR-29 | **Leave a group** (only with a settled balance, or with explicit acknowledgement). | P1 |
-| FR-30 | **Placeholder members:** add a person who hasn't joined yet by name, and claim the placeholder when they sign up. | P1 |
+| FR-30 | **Placeholder members:** add a person who hasn't joined yet by name, and claim the placeholder when they sign up. | P0 |
+| FR-64 | **Friends list:** explicit friends, everyone you share or shared a group with, and anyone you have a friend-to-friend group with; blocked people never appear. | P0 |
+| FR-65 | **Friend invite link:** a personal "add me" link (expiry, use limit, revocable); whoever opens it becomes your friend. | P0 |
+| FR-66 | **Friend requests:** send to someone you know from a group, accept, decline (quietly) or cancel; a request to someone who already asked you connects you at once. | P0 |
+| FR-67 | **Add by email or phone:** the answer is always "sent", whether or not the address is registered, so it can't be used to look people up; delivered to whoever has that verified email or phone; at most 20 requests a day. Phone matching needs SMS sign-in (a paid SMS provider) and waits until then. | P0 |
 
 ### 2.4 Balances, bills and history
 

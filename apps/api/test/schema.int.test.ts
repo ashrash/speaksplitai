@@ -532,8 +532,10 @@ describe('audit_log', () => {
 });
 
 describe('migration', () => {
-  it('reverts cleanly and re-applies', async () => {
-    await db.dataSource.undoLastMigration({ transaction: 'each' });
+  it('reverts every migration cleanly and re-applies them', async () => {
+    for (let i = 0; i < db.dataSource.migrations.length; i++) {
+      await db.dataSource.undoLastMigration({ transaction: 'each' });
+    }
     const { n } = await one<{ n: string }>(
       `select count(*) as n from pg_tables where schemaname = 'public' and tablename <> 'typeorm_migrations'`,
     );

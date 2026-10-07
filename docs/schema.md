@@ -47,6 +47,9 @@ Items marked **(change)** differ from the plan's first draft; section 6 of `plan
 | 17 | **(change)** Balances are per currency. `member_balances` returns one row per (member, currency); amounts in different currencies are never added together. | Converting at today's rate would silently change what people owe. Conversion is a display concern, and settling is an explicit act. |
 | 18 | **(change)** A settlement stores the debt cleared (`amount_minor` + `currency`) and, if paid in another currency, what was actually sent (`paid_amount_minor` + `paid_currency`). UPI requires INR. | Paying a $10 debt with ₹831.23 over UPI clears exactly $10 and keeps the rupee amount for the record; the implied rate is the payer's choice. |
 | 19 | `exchange_rates` holds dated rates (`numeric(24,12)`) used only for converted views and suggested settlement amounts. | Rates can be wrong or stale; nothing that affects balances depends on them. |
+| 20 | **(change)** Friends are explicit rows in `friendships` (one per pair, `user_a < user_b`), on top of the implicit "shares a group" relationship. | Lets people split without creating a group first, and keeps a friendship when nobody shares a group. |
+| 21 | `friend_requests` can target a user, an email or a phone; email and phone requests are matched at read time against the recipient's **verified** email or phone. | Nobody learns whether an address is registered, and a request waits for someone who signs up later with that address. |
+| 22 | `invites.kind` is `group` or `friend`; friend invites have no group. | One token, expiry and use-limit mechanism for both kinds of link. |
 
 ---
 
@@ -1118,6 +1121,60 @@ from member_balances mb
 join groups g on g.id = mb.group_id
 where mb.user_id is not null and g.archived_at is null
 group by mb.user_id, mb.currency;
+```
+
+### 3.23 Friends (second migration, `1791400000000-Friends.ts`)
+
+_Friendships, friend requests, and friend invite links (decisions 20 to 22)._
+
+```sql
+-- invites: 'group' (join a group) or 'friend' (become friends with the creator, no group)
+alter table invites add column kind text not null default 'group';
+alter table invites alter column group_id drop not null;
+alter table invites
+  add constraint invites_kind_ck             check (kind in ('group','friend')),
+  add constraint invites_kind_group_ck       check ((kind = 'group') = (group_id is not null)),
+  add constraint invites_friend_no_target_ck check (kind = 'group' or placeholder_member_id is null);
+create index invites_friend_creator_idx on invites (created_by) where kind = 'friend' and revoked_at is null;
+
+-- friendships: one row per pair, user_a < user_b
+create table friendships (
+  user_a      uuid        not null references users (id) on delete cascade,
+  user_b      uuid        not null references users (id) on delete cascade,
+  source      text        not null,
+  created_at  timestamptz not null default now(),
+
+  constraint friendships_pk        primary key (user_a, user_b),
+  constraint friendships_order_ck  check (user_a < user_b),
+  constraint friendships_source_ck check (source in ('invite','request'))
+);
+create index friendships_user_b_idx on friendships (user_b);
+
+-- friend_requests: to a known user, or to an email / phone that may match someone later
+create table friend_requests (
+  id            uuid        primary key default gen_random_uuid(),
+  from_user_id  uuid        not null references users (id) on delete cascade,
+  to_user_id    uuid        references users (id) on delete cascade,
+  to_email      citext,
+  to_phone      text,
+  status        text        not null default 'pending',
+  created_at    timestamptz not null default now(),
+  responded_at  timestamptz,
+
+  constraint friend_requests_target_ck   check (num_nonnulls(to_user_id, to_email, to_phone) >= 1),
+  constraint friend_requests_not_self_ck check (to_user_id is null or to_user_id <> from_user_id),
+  constraint friend_requests_status_ck   check (status in ('pending','accepted','declined','cancelled')),
+  constraint friend_requests_resp_ck     check ((status = 'pending') = (responded_at is null)),
+  constraint friend_requests_email_ck    check (to_email is null or to_email ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
+  constraint friend_requests_phone_ck    check (to_phone is null or to_phone ~ '^\+[1-9][0-9]{7,14}$')
+);
+create unique index friend_requests_pending_user_uq  on friend_requests (from_user_id, to_user_id) where status = 'pending' and to_user_id is not null;
+create unique index friend_requests_pending_email_uq on friend_requests (from_user_id, to_email)   where status = 'pending' and to_email is not null;
+create unique index friend_requests_pending_phone_uq on friend_requests (from_user_id, to_phone)   where status = 'pending' and to_phone is not null;
+create index friend_requests_to_user_idx  on friend_requests (to_user_id) where status = 'pending';
+create index friend_requests_to_email_idx on friend_requests (to_email)   where status = 'pending';
+create index friend_requests_to_phone_idx on friend_requests (to_phone)   where status = 'pending';
+create index friend_requests_from_recent_idx on friend_requests (from_user_id, created_at desc);
 ```
 
 ---

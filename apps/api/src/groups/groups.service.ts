@@ -215,8 +215,8 @@ export class GroupsService {
   /**
    * Returns the friend-to-friend group with another user, creating it the first time. There is
    * one per pair (groups.direct_key is unique); two people opening it at once get the same group.
-   * Allowed only with someone you share (or shared) a group with, and never if either has
-   * blocked the other.
+   * Allowed only with a friend or someone you share (or shared) a group with, and never if
+   * either has blocked the other.
    */
   async openDirect(user: User, friendId: string, requestId: string): Promise<DirectGroupResponse> {
     if (friendId === user.id) {
@@ -233,6 +233,9 @@ export class GroupsService {
            join group_members b on b.group_id = a.group_id
            join groups g on g.id = a.group_id
            where a.user_id = $1 and b.user_id = $2 and g.type <> 'direct'
+           union all
+           select 1 from friendships
+           where user_a = least($1::uuid, $2::uuid) and user_b = greatest($1::uuid, $2::uuid)
            limit 1`,
           [user.id, friendId],
         )

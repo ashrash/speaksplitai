@@ -3,6 +3,8 @@ import { Currency } from './currency.entity.js';
 import { ExpensePayer } from './expense-payer.entity.js';
 import { ExpenseSplit } from './expense-split.entity.js';
 import { Expense } from './expense.entity.js';
+import { FriendRequest } from './friend-request.entity.js';
+import { Friendship } from './friendship.entity.js';
 import { GroupMember } from './group-member.entity.js';
 import { Group } from './group.entity.js';
 import { IdempotencyKey } from './idempotency-key.entity.js';
@@ -17,6 +19,8 @@ export {
   Expense,
   ExpensePayer,
   ExpenseSplit,
+  FriendRequest,
+  Friendship,
   Group,
   GroupMember,
   IdempotencyKey,
@@ -37,6 +41,8 @@ export const ENTITIES = [
   Expense,
   ExpensePayer,
   ExpenseSplit,
+  FriendRequest,
+  Friendship,
   Group,
   GroupMember,
   IdempotencyKey,
