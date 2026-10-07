@@ -103,6 +103,7 @@ Priority: **P0** = MVP, **P1** = next, **P2** = later.
 | FR-32 | **Pending balances / dues:** a list of what I owe and what I'm owed, with ageing. | P0 |
 | FR-33 | **Simplify debts:** minimise the number of transfers within a group; can be toggled on or off per group. | P0 |
 | FR-34 | **View bills:** expense detail screen with the split breakdown, receipt image, payer and history. | P0 |
+| FR-34a | **Expense visibility:** every member (including former members, read-only) can see every expense in the group; the bill list shows only expenses the viewer paid for or is part of by default, with a toggle to show all. | P0 |
 | FR-35 | **Search:** search expenses by description, amount, person, group, category and date range. | P1 |
 | FR-36 | **Filters and sorting:** by group, person, status (open/settled), category, date. | P1 |
 | FR-37 | **Activity feed** per group (added, edited, deleted, settled). | P1 |
@@ -326,7 +327,8 @@ A dependency-free TypeScript package used by the app, the web page and the API.
 - Distribute leftover minor units with the largest-remainder method: each person gets the whole-unit part of their exact share, and the leftover units go one each to the largest fractional remainders, ties to the earlier participant in a stable order. Everyone ends within one minor unit of their exact share.
 - Validate: splits sum exactly to the total; percentages sum to exactly 100; no negative shares.
 - Compute net balances from expenses and settlements, per currency.
-- Simplify debts per currency (greedy matching of the largest creditor and debtor; optional exact minimisation for small groups).
+- Without simplification, list who owes whom: within each expense, members who paid less than their share owe those who paid more, in proportion to the excess; debts are then netted per pair.
+- Simplify debts per currency: split members into the largest number of groups whose balances sum to zero (exact search for up to 16 people with a non-zero balance), then within each group the largest debtor pays the largest creditor until all are settled. That gives the minimum number of transfers; beyond 16 people it falls back to the greedy step alone (at most n - 1 transfers).
 
 **Testing**
 - Property-based tests (fast-check): for any inputs, splits sum to the total, each part is within one unit of its exact share, results are deterministic; balances sum to zero per currency.
@@ -476,7 +478,7 @@ Verify current pricing before committing to any of these.
 
 1. ~~**Monorepo scaffolding**, CI, Docker Compose~~
 2. ~~**Postgres schema and migrations**, with integration tests; multi-currency~~
-3. **Split engine + tests**: ~~money maths, currencies, rounding, split types~~; balances and simplification still to do
+3. ~~**Split engine + tests**: money maths, currencies, rounding, split types, balances, simplification~~ (itemised splits come with step 10)
 4. **API:** Auth0 JWT validation, group-scoped authorization, expenses, balances, with tests
 5. **Mobile app:** OIDC + PKCE login, groups, manual expenses, balances, UPI settle
 6. **Members and safety:** invites, add/remove, roles, block/unblock
@@ -513,7 +515,8 @@ Verify current pricing before committing to any of these.
 
 ## 16. Open questions
 
-- Group-wide ledger visibility: can every member see every expense, or only those they're in?
+- ~~Group-wide ledger visibility: can every member see every expense, or only those they're in?~~ Every member can see every expense; lists default to the ones the viewer paid for or is part of, with a switch to show all.
+- ~~Do members who leave a group keep read access to its history?~~ Yes, read-only.
 - What happens to balances and history when a user deletes their account?
 - Is partial settlement allowed, and how is it allocated across debts?
 - Should debt simplification be on by default?

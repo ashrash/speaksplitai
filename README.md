@@ -215,11 +215,12 @@ pnpm test:int                           # database integration tests; needs TEST
 - [x] Monorepo scaffolding, CI, local Docker Compose stack
 - [x] Database schema and migrations, with integration tests for the money rules
 - [x] Multi-currency support in the schema
-- [ ] Split engine
+- [x] Split engine
   - [x] Exact money maths: currencies, decimal parsing, conversion, rounding
   - [x] Equal, exact, percent, shares and adjustment splits with property-based tests
-  - [ ] Net balances from expenses and settlements, per currency
-  - [ ] Debt simplification (fewest transfers), per currency
+  - [x] Net balances from expenses and settlements, per currency
+  - [x] Who owes whom, without simplification (for groups that turn it off)
+  - [x] Debt simplification (fewest transfers), per currency
 - [ ] API foundation
   - [ ] Auth0 token validation; create the user on first request
   - [ ] Group membership check on every group-scoped endpoint
@@ -242,9 +243,15 @@ pnpm test:int                           # database integration tests; needs TEST
 - [ ] Ship to friends: VM with Docker Compose and TLS, nightly backups, Android APK, testing UPI
       links on real phones
 
-Decisions still open: whether recorded payments count immediately or wait for the payee to
-confirm, whether every member sees every expense in a group, whether partial payments are
-allowed, which AI provider to use, and whether members who leave keep access to history.
+Decided:
+
+- **Visibility:** every member of a group can see every expense in it, but expense lists show
+  only the ones you paid for or are part of unless you ask for all of them.
+- **Leaving:** members who leave a group keep read access to its history; they can no longer
+  add or change anything in it.
+
+Still open: whether recorded payments count immediately or wait for the payee to confirm,
+whether partial payments are allowed, and which AI provider to use.
 
 ## After the MVP
 
