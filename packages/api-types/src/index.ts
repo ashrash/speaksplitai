@@ -163,3 +163,18 @@ export const groupDetailResponseSchema = groupResponseSchema.extend({
   members: z.array(groupMemberSchema),
 });
 export type GroupDetailResponse = z.infer<typeof groupDetailResponseSchema>;
+
+export const listGroupsQuerySchema = z.object({
+  status: z.enum(['active', 'archived']).default('active'),
+});
+
+/** Opens (or returns) the friend-to-friend group with another user. */
+export const openDirectRequestSchema = z.object({ userId: uuidSchema });
+
+export const directGroupResponseSchema = z.object({
+  groupId: uuidSchema,
+  friend: z.object({ userId: uuidSchema, name: z.string() }),
+  defaultCurrency: currencySchema,
+  archivedAt: z.string().nullable(),
+});
+export type DirectGroupResponse = z.infer<typeof directGroupResponseSchema>;

@@ -9,7 +9,7 @@ import { ErrorsFilter } from './common/errors.filter.js';
 import { requestId } from './common/request-id.js';
 import { type Env, validateEnv } from './config/env.js';
 import { typeormOptions } from './database/typeorm-options.js';
-import { GroupsController } from './groups/groups.controller.js';
+import { DirectController, GroupsController } from './groups/groups.controller.js';
 import { GroupsService } from './groups/groups.service.js';
 import { HealthController } from './health/health.controller.js';
 import { MeController } from './users/me.controller.js';
@@ -48,7 +48,7 @@ import { UsersService } from './users/users.service.js';
         typeormOptions(config.get('DATABASE_URL', { infer: true })),
     }),
   ],
-  controllers: [HealthController, MeController, GroupsController],
+  controllers: [HealthController, MeController, GroupsController, DirectController],
   providers: [
     UsersService,
     ProfileService,

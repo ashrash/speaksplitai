@@ -230,8 +230,9 @@ pnpm test:int                           # database integration tests; needs TEST
   - [x] Test that one user can't read or change another group's data
 - [ ] API features
   - [x] Profile and UPI IDs (email and phone changes wait for a verified flow)
-  - [ ] Groups: ~~create, list, view, rename (with optimistic locking), default currency~~; archive, delete
-  - [ ] Friend-to-friend expenses
+  - [x] Groups: create, list, view, rename (optimistic locking), default currency, archive,
+        delete when settled
+  - [x] Friend-to-friend groups (expenses in them come with the expense endpoints)
   - [ ] Invite links; join; remove members (blocked while they have a balance)
   - [ ] Expenses: create, edit, delete, with audit history
   - [ ] Balances per group and overall, with simplified debts
