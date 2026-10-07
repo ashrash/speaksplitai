@@ -27,3 +27,84 @@ export const healthResponseSchema = z.object({
   version: z.string(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
+
+/** Error responses from the API. */
+export const errorResponseSchema = z.object({
+  error: z.object({
+    status: z.number().int(),
+    code: z.string(),
+    message: z.string(),
+    requestId: z.string(),
+    details: z.unknown().optional(),
+  }),
+});
+export type ErrorResponse = z.infer<typeof errorResponseSchema>;
+
+export const meResponseSchema = z.object({
+  id: uuidSchema,
+  name: z.string(),
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+  locale: z.string(),
+  defaultCurrency: currencySchema,
+});
+export type MeResponse = z.infer<typeof meResponseSchema>;
+
+/** Group types a user can create; 'direct' groups are made by the friend-to-friend flow. */
+export const groupTypeSchema = z.enum(['trip', 'flat', 'couple', 'friends', 'event', 'other']);
+
+export const createGroupRequestSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  type: groupTypeSchema.default('friends'),
+  defaultCurrency: currencySchema.default('INR'),
+  simplifyDebts: z.boolean().default(true),
+});
+export type CreateGroupRequest = z.input<typeof createGroupRequestSchema>;
+
+/** Optimistic locking: send the version you last saw; a 409 means someone changed it first. */
+export const updateGroupRequestSchema = z
+  .object({
+    version: z.number().int().positive(),
+    name: z.string().trim().min(1).max(100).optional(),
+    defaultCurrency: currencySchema.optional(),
+    simplifyDebts: z.boolean().optional(),
+  })
+  .refine(
+    (v) => v.name !== undefined || v.defaultCurrency !== undefined || v.simplifyDebts !== undefined,
+    {
+      message: 'nothing to update',
+    },
+  );
+export type UpdateGroupRequest = z.input<typeof updateGroupRequestSchema>;
+
+export const groupMemberSchema = z.object({
+  id: uuidSchema,
+  userId: uuidSchema.nullable(),
+  name: z.string(),
+  role: z.enum(['owner', 'admin', 'member']),
+  joinedAt: z.string(),
+  leftAt: z.string().nullable(),
+});
+
+export const groupResponseSchema = z.object({
+  id: uuidSchema,
+  name: z.string(),
+  type: z.string(),
+  defaultCurrency: currencySchema,
+  simplifyDebts: z.boolean(),
+  version: z.number().int(),
+  archivedAt: z.string().nullable(),
+  /** The caller's own membership: role, and whether they have left (read-only). */
+  me: z.object({
+    memberId: uuidSchema,
+    role: z.enum(['owner', 'admin', 'member']),
+    leftAt: z.string().nullable(),
+  }),
+});
+export type GroupResponse = z.infer<typeof groupResponseSchema>;
+
+export const groupDetailResponseSchema = groupResponseSchema.extend({
+  members: z.array(groupMemberSchema),
+});
+export type GroupDetailResponse = z.infer<typeof groupDetailResponseSchema>;
