@@ -103,6 +103,7 @@ Priority: **P0** = MVP, **P1** = next, **P2** = later.
 | FR-32 | **Pending balances / dues:** a list of what I owe and what I'm owed, with ageing. | P0 |
 | FR-33 | **Simplify debts:** minimise the number of transfers within a group; can be toggled on or off per group. | P0 |
 | FR-34 | **View bills:** expense detail screen with the split breakdown, receipt image, payer and history. | P0 |
+| FR-34a | **Expense visibility:** every member (including former members, read-only) can see every expense in the group; the bill list shows only expenses the viewer paid for or is part of by default, with a toggle to show all. | P0 |
 | FR-35 | **Search:** search expenses by description, amount, person, group, category and date range. | P1 |
 | FR-36 | **Filters and sorting:** by group, person, status (open/settled), category, date. | P1 |
 | FR-37 | **Activity feed** per group (added, edited, deleted, settled). | P1 |
@@ -514,7 +515,8 @@ Verify current pricing before committing to any of these.
 
 ## 16. Open questions
 
-- Group-wide ledger visibility: can every member see every expense, or only those they're in?
+- ~~Group-wide ledger visibility: can every member see every expense, or only those they're in?~~ Every member can see every expense; lists default to the ones the viewer paid for or is part of, with a switch to show all.
+- ~~Do members who leave a group keep read access to its history?~~ Yes, read-only.
 - What happens to balances and history when a user deletes their account?
 - Is partial settlement allowed, and how is it allocated across debts?
 - Should debt simplification be on by default?

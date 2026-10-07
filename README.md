@@ -243,9 +243,15 @@ pnpm test:int                           # database integration tests; needs TEST
 - [ ] Ship to friends: VM with Docker Compose and TLS, nightly backups, Android APK, testing UPI
       links on real phones
 
-Decisions still open: whether recorded payments count immediately or wait for the payee to
-confirm, whether every member sees every expense in a group, whether partial payments are
-allowed, which AI provider to use, and whether members who leave keep access to history.
+Decided:
+
+- **Visibility:** every member of a group can see every expense in it, but expense lists show
+  only the ones you paid for or are part of unless you ask for all of them.
+- **Leaving:** members who leave a group keep read access to its history; they can no longer
+  add or change anything in it.
+
+Still open: whether recorded payments count immediately or wait for the payee to confirm,
+whether partial payments are allowed, and which AI provider to use.
 
 ## After the MVP
 

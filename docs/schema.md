@@ -1245,7 +1245,18 @@ language sql stable as $$
   select nullif(current_setting('app.user_id', true), '')::uuid
 $$;
 
--- security definer so policies on group_members don't recurse
+-- security definer so policies on group_members don't recurse.
+-- is_member: current or former member (read access to history is kept after leaving).
+create or replace function is_member(p_group_id uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from group_members gm
+    where gm.group_id = p_group_id
+      and gm.user_id  = app_current_user_id()
+  )
+$$;
+
+-- is_active_member: may write (add, edit, settle) in the group.
 create or replace function is_active_member(p_group_id uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
@@ -1259,7 +1270,7 @@ $$;
 alter table expenses enable row level security;
 alter table expenses force  row level security;
 create policy expenses_member_select on expenses for select to app_user
-  using (is_active_member(group_id));
+  using (is_member(group_id));
 create policy expenses_member_write  on expenses for insert to app_user
   with check (is_active_member(group_id));
 -- repeat for settlements, expense_payers, expense_splits, invites, ...
@@ -1270,7 +1281,9 @@ create policy expenses_member_write  on expenses for insert to app_user
 set local app.user_id = '<users.id of the caller>';
 ```
 
-Behaviour verified in testing: a member sees only their groups' rows, and a connection that hasn't set `app.user_id` sees nothing. With this policy, members who leave a group lose read access to its history; whether they should keep it is open question 1 in the main plan.
+Access rules (decided): every member, current or former, can read every expense in the group, so balances and history stay explainable after someone leaves; only active members can write. Which expenses a list *shows by default* (the ones the viewer paid for or is part of) is a query filter in the API, not an access rule.
+
+The first draft verified by hand that a member sees only their groups' rows and that a connection without `app.user_id` sees nothing; the `is_member` split above is not yet covered by automated tests.
 
 ---
 
