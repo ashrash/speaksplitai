@@ -117,8 +117,8 @@ Priority: **P0** = MVP, **P1** = next, **P2** = later.
 | FR-40 | **Settle via UPI:** generate a `upi://pay` deep link with payee VPA, amount, note and reference, and open the user's UPI app. | P0 |
 | FR-41 | **UPI app choice:** buttons for GPay, PhonePe and Paytm, plus a generic chooser. | P1 |
 | FR-42 | **Fallbacks:** copy UPI ID, show a QR code. | P1 |
-| FR-43 | **Record payment:** mark a settlement as paid (full or partial) and as cash or UPI. | P0 |
-| FR-44 | **Confirmation by payee:** the receiver confirms a payment; unconfirmed payments stay "pending confirmation". | P1 |
+| FR-43 | **Record payment:** mark a settlement as paid, as cash or UPI. It counts immediately, and must clear the full amount owed between the two members in that currency (no partial payments). | P0 |
+| FR-44 | **Dispute by payee:** payments count as soon as they're recorded; the receiver can dispute one ("I didn't get this"), which reverses it until resolved. | P1 |
 | FR-45 | **Payment evidence:** optionally attach the UPI success screenshot and extract the reference number and amount. | P2 |
 | FR-46 | **Settle-all** suggestions for a group (the minimal set of transfers). | P1 |
 | FR-47 | **Reminders:** push notification and a prefilled WhatsApp message containing a pay link. | P1 |
@@ -378,7 +378,7 @@ Evaluate regularly with a small test set of real sentences in English, Hindi and
 
 - Build `upi://pay?pa=<VPA>&pn=<name>&am=<amount>&cu=INR&tn=<note>&tr=<ref>`.
 - On Android this opens an app chooser. On iOS, per-app schemes may be needed, so offer explicit GPay, PhonePe and Paytm buttons.
-- The app can't reliably verify that the payment succeeded, so the flow is: open UPI app → return → payer taps "I've paid" → payee confirms (FR-43, FR-44).
+- The app can't reliably verify that the payment succeeded, so the flow is: open UPI app → return → payer taps "I've paid" → the payment counts immediately; the payee can dispute it later (FR-43, FR-44).
 - Fallbacks: copy UPI ID and show a QR.
 - UPI is INR-only. A debt in another currency is settled by paying rupees: the app suggests an amount from the latest stored rate, the payer can edit it, and the settlement records both the debt cleared and the rupees actually sent.
 - Some UPI apps restrict or decline prefilled payments to personal VPAs. Test on friends' real apps early.
@@ -518,7 +518,8 @@ Verify current pricing before committing to any of these.
 - ~~Group-wide ledger visibility: can every member see every expense, or only those they're in?~~ Every member can see every expense; lists default to the ones the viewer paid for or is part of, with a switch to show all.
 - ~~Do members who leave a group keep read access to its history?~~ Yes, read-only.
 - What happens to balances and history when a user deletes their account?
-- Is partial settlement allowed, and how is it allocated across debts?
+- ~~Is partial settlement allowed, and how is it allocated across debts?~~ No: a payment clears the full amount owed between two members in one currency.
+- ~~Do recorded payments count immediately or wait for the payee?~~ Immediately.
 - Should debt simplification be on by default?
 - Which languages beyond English and Hindi for the UI and parser?
 - How long are receipt images kept?

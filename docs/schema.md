@@ -370,7 +370,7 @@ classDiagram
 
 Smaller enumerations (`NotifyLevel`, `Category`, `AttachmentKind`, `Platform`, `AuditEntity`, `AuditAction`) are listed in the `CHECK` constraints in section 3.
 
-**Settlement status transitions** (enforced in the service layer; the table enforces the field combinations):
+**Settlement status transitions** (enforced in the service layer; the table enforces the field combinations). Decided for the MVP: a recorded payment is created directly as `confirmed`, with `confirmed_by` set to the person who recorded it, so it counts at once; `pending` is unused until payee confirmation is wanted. The API also rejects partial payments: `amount_minor` must equal what the payer owes the payee in that currency.
 
 ```mermaid
 stateDiagram-v2
