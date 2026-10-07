@@ -10,6 +10,8 @@ const envSchema = z.object({
   AUTH0_ISSUER_URL: z.url(),
   /** The API identifier configured in Auth0; access tokens must carry it in `aud`. */
   AUTH0_AUDIENCE: z.string().min(1),
+  /** Base URL invite links point at, e.g. https://pay.example.com (the app or web page). */
+  PUBLIC_APP_URL: z.url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
