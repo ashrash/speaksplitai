@@ -1,7 +1,7 @@
 /** Money is always an integer number of paise (1 INR = 100 paise). Never a float. */
 export type Paise = number;
 
-/** Mirrors `expenses.split_type` in docs/schema.md. */
+/** Mirrors the `expenses.split_type` CHECK constraint in the initial migration. */
 export const SPLIT_TYPES = [
   'equal',
   'exact',
