@@ -1,30 +1,397 @@
-import type { MigrationInterface, QueryRunner } from 'typeorm';
+# SpeakSplit Pay: Data Model & PostgreSQL Schema
 
-/**
- * Initial schema: every table, constraint, index, trigger and view.
- *
- * Money is a bigint count of the currency's minor unit (paise, cents, yen, fils), named *_minor.
- * Each expense and settlement carries its own currency; balances are kept per currency and are
- * never silently converted. Payers, splits, item assignments and settlements reference
- * group_members.id (so placeholder members work), and composite foreign keys keep them inside
- * the expense's group. A deferred constraint trigger checks at COMMIT that payers and splits each
- * sum to expenses.total_minor, so always write an expense and its rows in one transaction.
- */
-export class InitialSchema1791331200000 implements MigrationInterface {
-  name = 'InitialSchema1791331200000';
+Companion to [`plan.md`](plan.md). Covers the entity class diagrams, full PostgreSQL DDL with constraints, indexes, balance views, an optional row-level security setup, and notes on mapping all of it to TypeORM.
 
-  public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(UP_SQL);
+Implemented in `apps/api/src/database/migrations/1791331200000-InitialSchema.ts`. Section 3 is generated from that file, so the two always match.
+
+> **Target:** PostgreSQL 16+. The DDL is exercised by the integration tests in `apps/api/test` (`pnpm test:int`, see [section 9](#9-verification)).
+
+---
+
+## Table of contents
+
+1. [Design decisions](#1-design-decisions)
+2. [Class diagrams](#2-class-diagrams)
+3. [DDL](#3-ddl)
+4. [Index catalogue](#4-index-catalogue)
+5. [Common queries and the indexes they use](#5-common-queries-and-the-indexes-they-use)
+6. [Optional: row-level security](#6-optional-row-level-security)
+7. [TypeORM mapping notes](#7-typeorm-mapping-notes)
+8. [Data lifecycle and maintenance](#8-data-lifecycle-and-maintenance)
+9. [Verification](#9-verification)
+
+---
+
+## 1. Design decisions
+
+Items marked **(change)** differ from the plan's first draft; section 6 of `plan.md` has been updated to match.
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **(change)** `users.id` is an internal UUID; the Auth0 `sub` lives in `users.auth_subject` (unique). | Foreign keys stay compact UUIDs, and switching or adding an identity provider later doesn't rewrite every table. |
+| 2 | **(change)** Payers, splits, item assignments and settlements reference **`group_members.id`**, not `users.id`. | Placeholder members (FR-30) have no user account but still owe and pay money. When a placeholder is claimed, `user_id` is filled in and all history follows automatically. |
+| 3 | **(change)** Friend-to-friend expenses (FR-23) live in a hidden group with `type = 'direct'`, so `expenses.group_id` is always `NOT NULL`. `direct_key` (the two user IDs, sorted) keeps one direct group per pair. | One code path for balances, settlements and feeds instead of two. |
+| 4 | Composite foreign keys such as `(group_id, member_id) → group_members (group_id, id)`. | The database itself guarantees that every payer, split and settlement belongs to the **same group** as its expense. A cross-group mix-up is impossible, not just unlikely. |
+| 5 | `expense_splits` always stores the **final** owed amount in minor units, whatever the split type. `split_type`, `share_value`, `adjustment_minor` and item assignments record the user's input. | Balances are a plain `SUM`, and the split engine's output is what's stored and audited. |
+| 6 | A **deferred constraint trigger** checks at commit that payers and splits each sum exactly to `total_minor`. | The core money invariant is enforced by Postgres, not only by application code. The check runs at `COMMIT`, so an expense and its rows can be inserted in any order within one transaction. |
+| 7 | **(change)** UPI IDs move to `user_upi_ids` (several per user, at most one primary). | FR-50 allows multiple UPI IDs. |
+| 8 | **(change)** `expense_items.assigned_user_ids` (array) becomes the join table `expense_item_assignments`. | Arrays can't have foreign keys; a join table can, and it supports weighted shares per item. |
+| 9 | Enumerations are `text` columns with `CHECK` constraints, not Postgres `ENUM` types. | Adding a value is a one-line constraint change. Removing or renaming an `ENUM` value is awkward, and TypeORM's enum migrations are fiddly. |
+| 10 | **(change)** Money is a `bigint` count of the currency's **minor unit** (paise, cents, yen, fils), in columns named `*_minor`. | Integers are exact to the smallest unit of every currency. `integer` would overflow at about Rp 21 million (IDR has 2 decimals), so amounts are `bigint`; the API maps them to JS numbers with a transformer that refuses anything beyond `Number.MAX_SAFE_INTEGER` (about ₹90 trillion). |
+| 11 | Soft deletes for expenses and comments (`deleted_at`). Members leave via `left_at` and are never hard-deleted on their own; only deleting a whole group removes member rows. Users are anonymised, not deleted. | History and balances stay correct for everyone else in the group. |
+| 12 | `audit_log` is append-only, carries `group_id`, and also serves as the activity feed (FR-37). It has no foreign keys. | The trail survives deletions and can't be edited after the fact. |
+| 13 | `version` columns on `groups`, `expenses` and `settlements`. | Optimistic locking via TypeORM `@VersionColumn`, so two people editing the same expense can't silently overwrite each other. |
+| 14 | A generic `idempotency_keys` table. | Used by a NestJS interceptor for create-expense and record-payment, so retries on bad networks never duplicate anything. |
+| 15 | **(change)** A `currencies` reference table (code, minor-unit exponent), seeded from the split engine's list; every currency column is a foreign key to it. | Unknown currencies are impossible, and the number of decimals per currency is data, not code scattered across clients. An integration test checks the seed matches the split engine. |
+| 16 | **(change)** Each expense and settlement has its own `currency`; groups and users have a `default_currency`. | Trips abroad mix currencies within one group. |
+| 17 | **(change)** Balances are per currency. `member_balances` returns one row per (member, currency); amounts in different currencies are never added together. | Converting at today's rate would silently change what people owe. Conversion is a display concern, and settling is an explicit act. |
+| 18 | **(change)** A settlement stores the debt cleared (`amount_minor` + `currency`) and, if paid in another currency, what was actually sent (`paid_amount_minor` + `paid_currency`). UPI requires INR. | Paying a $10 debt with ₹831.23 over UPI clears exactly $10 and keeps the rupee amount for the record; the implied rate is the payer's choice. |
+| 19 | `exchange_rates` holds dated rates (`numeric(24,12)`) used only for converted views and suggested settlement amounts. | Rates can be wrong or stale; nothing that affects balances depends on them. |
+
+---
+
+## 2. Class diagrams
+
+Notation: `?` marks a nullable field. Amounts are `bigint` minor units of the row's currency.
+
+### 2.1 Core ledger
+
+```mermaid
+classDiagram
+  direction LR
+
+  class Group {
+    +uuid id
+    +string name
+    +GroupType type
+    +string defaultCurrency
+    +bool simplifyDebts
+    +string? directKey
+    +int version
+    +datetime? archivedAt
   }
 
-  public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(DOWN_SQL);
+  class GroupMember {
+    +uuid id
+    +uuid? userId
+    +string? placeholderName
+    +MemberRole role
+    +NotifyLevel notifyLevel
+    +datetime? mutedUntil
+    +datetime joinedAt
+    +datetime? claimedAt
+    +datetime? leftAt
   }
-}
 
-// String.raw keeps the regex backslashes in CHECK constraints intact.
-const UP_SQL = String.raw`
--- Extensions and helpers
+  class Expense {
+    +uuid id
+    +string description
+    +Category? category
+    +string? notes
+    +bigint totalMinor
+    +string currency
+    +date expenseDate
+    +SplitType splitType
+    +ExpenseSource source
+    +int version
+    +datetime? deletedAt
+  }
+
+  class ExpensePayer {
+    +bigint paidMinor
+  }
+
+  class ExpenseSplit {
+    +bigint owedMinor
+    +decimal? shareValue
+    +bigint? adjustmentMinor
+  }
+
+  class ExpenseItem {
+    +uuid id
+    +int position
+    +ItemKind kind
+    +string name
+    +decimal quantity
+    +bigint amountMinor
+  }
+
+  class ExpenseItemAssignment {
+    +decimal shares
+  }
+
+  class Settlement {
+    +uuid id
+    +bigint amountMinor
+    +string currency
+    +bigint? paidAmountMinor
+    +string? paidCurrency
+    +PaymentMethod method
+    +string? upiRef
+    +string? note
+    +SettlementStatus status
+    +string? disputedReason
+    +datetime? confirmedAt
+    +int version
+  }
+
+  class RecurringExpense {
+    +uuid id
+    +json template
+    +string rrule
+    +string timezone
+    +datetime nextRunAt
+    +datetime? pausedAt
+  }
+
+  Group "1" *-- "1..*" GroupMember : members
+  Group "1" *-- "0..*" Expense : expenses
+  Group "1" *-- "0..*" Settlement : settlements
+  Group "1" *-- "0..*" RecurringExpense : schedules
+
+  Expense "1" *-- "1..*" ExpensePayer : paid by
+  Expense "1" *-- "1..*" ExpenseSplit : split among
+  Expense "1" *-- "0..*" ExpenseItem : line items
+  ExpenseItem "1" *-- "0..*" ExpenseItemAssignment : assigned to
+
+  ExpensePayer "0..*" --> "1" GroupMember : member
+  ExpenseSplit "0..*" --> "1" GroupMember : member
+  ExpenseItemAssignment "0..*" --> "1" GroupMember : member
+  Settlement "0..*" --> "1" GroupMember : from
+  Settlement "0..*" --> "1" GroupMember : to
+
+  RecurringExpense "0..1" --> "0..*" Expense : generates
+
+  class Currency {
+    +string code
+    +int minorUnit
+    +string name
+  }
+
+  class ExchangeRate {
+    +string base
+    +string quote
+    +decimal rate
+    +datetime asOf
+    +string source
+  }
+
+  Expense "0..*" --> "1" Currency : currency
+  Settlement "0..*" --> "1" Currency : currency
+  Settlement "0..*" --> "0..1" Currency : paid currency
+  Group "0..*" --> "1" Currency : default
+  ExchangeRate "0..*" --> "2" Currency : base / quote
+```
+
+### 2.2 Identity, access and supporting entities
+
+```mermaid
+classDiagram
+  direction LR
+
+  class User {
+    +uuid id
+    +string authSubject
+    +string name
+    +string? email
+    +string? phone
+    +string? avatarUrl
+    +string locale
+    +string defaultCurrency
+    +datetime? deletedAt
+  }
+
+  class UserUpiId {
+    +uuid id
+    +string vpa
+    +string? label
+    +bool isPrimary
+  }
+
+  class GroupMember {
+    +uuid id
+    +uuid? userId
+  }
+
+  class Group {
+    +uuid id
+  }
+
+  class Expense {
+    +uuid id
+  }
+
+  class Settlement {
+    +uuid id
+  }
+
+  class Invite {
+    +uuid id
+    +bytes tokenHash
+    +string? targetEmail
+    +string? targetPhone
+    +int? maxUses
+    +int useCount
+    +datetime expiresAt
+    +datetime? revokedAt
+  }
+
+  class Block {
+    +string? reason
+    +datetime createdAt
+  }
+
+  class Attachment {
+    +uuid id
+    +AttachmentKind kind
+    +string storageKey
+    +string mimeType
+    +int sizeBytes
+    +datetime? expiresAt
+  }
+
+  class Comment {
+    +uuid id
+    +string body
+    +datetime? editedAt
+    +datetime? deletedAt
+  }
+
+  class PushToken {
+    +uuid id
+    +string token
+    +Platform platform
+    +datetime lastSeenAt
+  }
+
+  class AuditLog {
+    +bigint id
+    +uuid? groupId
+    +AuditEntity entity
+    +uuid entityId
+    +uuid? actorId
+    +AuditAction action
+    +json? diff
+  }
+
+  class IdempotencyKey {
+    +string idemKey
+    +string method
+    +string path
+    +bytes requestHash
+    +string status
+    +int? responseStatus
+    +json? responseBody
+    +datetime expiresAt
+  }
+
+  User "1" *-- "0..*" UserUpiId : UPI IDs
+  User "0..1" <-- "0..*" GroupMember : is
+  User "1" *-- "0..*" PushToken : devices
+  User "1" --> "0..*" Block : blocker
+  Block "0..*" --> "1" User : blocked
+  User "1" *-- "0..*" IdempotencyKey : requests
+
+  Group "1" *-- "0..*" Invite : invites
+  Invite "0..*" --> "0..1" GroupMember : claims placeholder
+
+  Expense "0..1" o-- "0..*" Attachment : receipts
+  Settlement "0..1" o-- "0..*" Attachment : payment proof
+  Expense "1" *-- "0..*" Comment : comments
+  Comment "0..*" --> "1" User : author
+
+  AuditLog ..> Group : feed for
+```
+
+### 2.3 Enumerations
+
+```mermaid
+classDiagram
+  direction LR
+  class GroupType {
+    <<enumeration>>
+    trip
+    flat
+    couple
+    friends
+    event
+    other
+    direct
+  }
+  class MemberRole {
+    <<enumeration>>
+    owner
+    admin
+    member
+  }
+  class SplitType {
+    <<enumeration>>
+    equal
+    exact
+    percent
+    shares
+    adjustment
+    itemized
+  }
+  class ExpenseSource {
+    <<enumeration>>
+    manual
+    text
+    voice
+    image
+    image_text
+    recurring
+  }
+  class SettlementStatus {
+    <<enumeration>>
+    pending
+    confirmed
+    disputed
+    cancelled
+  }
+  class PaymentMethod {
+    <<enumeration>>
+    upi
+    cash
+    bank_transfer
+    other
+  }
+  class ItemKind {
+    <<enumeration>>
+    item
+    tax
+    tip
+    service_charge
+    delivery
+    discount
+    other
+  }
+```
+
+Smaller enumerations (`NotifyLevel`, `Category`, `AttachmentKind`, `Platform`, `AuditEntity`, `AuditAction`) are listed in the `CHECK` constraints in section 3.
+
+**Settlement status transitions** (enforced in the service layer; the table enforces the field combinations):
+
+```mermaid
+stateDiagram-v2
+  [*] --> pending : payer records payment
+  pending --> confirmed : payee confirms
+  pending --> disputed : payee disputes (reason required)
+  pending --> cancelled : payer cancels
+  disputed --> pending : payer resubmits
+  disputed --> cancelled
+  confirmed --> disputed : payee reverses (reason required)
+```
+
+---
+
+## 3. DDL
+
+Run in order. In the repository this is the first hand-written TypeORM migration (see [section 7](#7-typeorm-mapping-notes)); this section is generated from it.
+
+### 3.1 Extensions and helpers
+
+```sql
 create extension if not exists pg_trgm;   -- fuzzy / substring search
 create extension if not exists citext;    -- case-insensitive email
 
@@ -41,8 +408,13 @@ begin
   raise exception '% is append-only', tg_table_name
     using errcode = 'insufficient_privilege';
 end $$;
+```
 
--- currencies: ISO 4217 codes and their minor-unit exponent (INR 2, JPY 0, KWD 3).
+### 3.2 `currencies`
+
+_ISO 4217 codes and their minor-unit exponent, seeded from the split engine._
+
+```sql
 -- Keep in sync with CURRENCIES in packages/split-engine/src/currency.ts.
 create table currencies (
   code        char(3)  primary key,
@@ -84,8 +456,13 @@ insert into currencies (code, minor_unit, name) values
   ('USD', 2, 'US Dollar'),
   ('VND', 0, 'Vietnamese Dong'),
   ('ZAR', 2, 'South African Rand');
+```
 
--- exchange_rates: for showing converted totals and suggesting cross-currency settlement amounts.
+### 3.3 `exchange_rates`
+
+_Dated rates for converted views and settlement suggestions. Balances never use them._
+
+```sql
 -- Balances themselves are never converted.
 create table exchange_rates (
   base        char(3)        not null references currencies (code),
@@ -99,8 +476,11 @@ create table exchange_rates (
   constraint exchange_rates_distinct_ck check (base <> quote),
   constraint exchange_rates_rate_ck     check (rate > 0)
 );
+```
 
--- users
+### 3.4 `users`
+
+```sql
 create table users (
   id                uuid        primary key default gen_random_uuid(),
   auth_subject      text        not null,                 -- Auth0 'sub' claim
@@ -127,8 +507,11 @@ create unique index users_phone_active_uq on users (phone) where phone is not nu
 
 create trigger users_set_updated_at before update on users
   for each row execute function set_updated_at();
+```
 
--- user_upi_ids
+### 3.5 `user_upi_ids`
+
+```sql
 create table user_upi_ids (
   id          uuid        primary key default gen_random_uuid(),
   user_id     uuid        not null references users (id) on delete cascade,
@@ -143,8 +526,11 @@ create table user_upi_ids (
 
 create unique index user_upi_ids_user_vpa_uq     on user_upi_ids (user_id, lower(vpa));
 create unique index user_upi_ids_one_primary_uq  on user_upi_ids (user_id) where is_primary;
+```
 
--- groups
+### 3.6 `groups`
+
+```sql
 create table groups (
   id               uuid        primary key default gen_random_uuid(),
   name             text        not null,
@@ -168,8 +554,13 @@ create index groups_created_by_idx on groups (created_by);
 
 create trigger groups_set_updated_at before update on groups
   for each row execute function set_updated_at();
+```
 
--- group_members
+### 3.7 `group_members`
+
+_Real users and placeholders._
+
+```sql
 create table group_members (
   id                uuid        primary key default gen_random_uuid(),
   group_id          uuid        not null references groups (id) on delete cascade,
@@ -214,8 +605,13 @@ end $$;
 
 create trigger group_members_no_hard_delete before delete on group_members
   for each row execute function guard_member_hard_delete();
+```
 
--- recurring_expenses
+### 3.8 `recurring_expenses` (P2)
+
+_Created before expenses for the FK._
+
+```sql
 create table recurring_expenses (
   id           uuid        primary key default gen_random_uuid(),
   group_id     uuid        not null references groups (id) on delete cascade,
@@ -238,8 +634,11 @@ create index recurring_expenses_group_idx on recurring_expenses (group_id);
 
 create trigger recurring_expenses_set_updated_at before update on recurring_expenses
   for each row execute function set_updated_at();
+```
 
--- expenses
+### 3.9 `expenses`
+
+```sql
 create table expenses (
   id                    uuid        primary key default gen_random_uuid(),
   group_id              uuid        not null references groups (id) on delete cascade,
@@ -282,8 +681,11 @@ create index expenses_recurring_idx        on expenses (recurring_expense_id) wh
 
 create trigger expenses_set_updated_at before update on expenses
   for each row execute function set_updated_at();
+```
 
--- expense_payers
+### 3.10 `expense_payers`
+
+```sql
 create table expense_payers (
   expense_id  uuid    not null,
   group_id    uuid    not null,
@@ -299,8 +701,13 @@ create table expense_payers (
 );
 
 create index expense_payers_member_idx on expense_payers (group_id, member_id);
+```
 
--- expense_splits
+### 3.11 `expense_splits`
+
+_Always the materialised result, whatever the split type._
+
+```sql
 create table expense_splits (
   expense_id        uuid          not null,
   group_id          uuid          not null,
@@ -319,8 +726,13 @@ create table expense_splits (
 );
 
 create index expense_splits_member_idx on expense_splits (group_id, member_id);
+```
 
--- expense_items + expense_item_assignments
+### 3.12 `expense_items` + `expense_item_assignments`
+
+_Itemised receipts, FR-7._
+
+```sql
 create table expense_items (
   id            uuid          primary key default gen_random_uuid(),
   expense_id    uuid          not null,
@@ -357,8 +769,13 @@ create table expense_item_assignments (
 );
 
 create index expense_item_assignments_member_idx on expense_item_assignments (group_id, member_id);
+```
 
--- settlements
+### 3.13 `settlements`
+
+_`amount_minor` + `currency` is the debt cleared; `paid_amount_minor` + `paid_currency` is what was actually sent, when that was another currency (FR-61)._
+
+```sql
 create table settlements (
   id                 uuid        primary key default gen_random_uuid(),
   group_id           uuid        not null references groups (id) on delete cascade,
@@ -406,8 +823,11 @@ create unique index settlements_upi_ref_uq on settlements (group_id, upi_ref)
 
 create trigger settlements_set_updated_at before update on settlements
   for each row execute function set_updated_at();
+```
 
--- invites
+### 3.14 `invites`
+
+```sql
 create table invites (
   id                     uuid        primary key default gen_random_uuid(),
   group_id               uuid        not null references groups (id) on delete cascade,
@@ -434,8 +854,11 @@ create table invites (
 );
 
 create index invites_group_active_idx on invites (group_id) where revoked_at is null;
+```
 
--- blocks
+### 3.15 `blocks`
+
+```sql
 create table blocks (
   blocker_id  uuid        not null references users (id) on delete cascade,
   blocked_id  uuid        not null references users (id) on delete cascade,
@@ -448,8 +871,13 @@ create table blocks (
 );
 
 create index blocks_blocked_idx on blocks (blocked_id);
+```
 
--- attachments
+### 3.16 `attachments`
+
+_Receipts, payment proofs, parse-only temp uploads._
+
+```sql
 create table attachments (
   id             uuid        primary key default gen_random_uuid(),
   uploaded_by    uuid        not null references users (id),
@@ -480,8 +908,11 @@ create table attachments (
 create index attachments_expense_idx    on attachments (expense_id)    where expense_id is not null;
 create index attachments_settlement_idx on attachments (settlement_id) where settlement_id is not null;
 create index attachments_expiry_idx     on attachments (expires_at)    where expires_at is not null;
+```
 
--- comments
+### 3.17 `comments` (P2)
+
+```sql
 create table comments (
   id          uuid        primary key default gen_random_uuid(),
   expense_id  uuid        not null references expenses (id) on delete cascade,
@@ -497,8 +928,11 @@ create table comments (
 
 create index comments_expense_idx on comments (expense_id, created_at) where deleted_at is null;
 create index comments_author_idx  on comments (author_id);
+```
 
--- push_tokens
+### 3.18 `push_tokens`
+
+```sql
 create table push_tokens (
   id            uuid        primary key default gen_random_uuid(),
   user_id       uuid        not null references users (id) on delete cascade,
@@ -514,8 +948,13 @@ create table push_tokens (
 );
 
 create index push_tokens_user_idx on push_tokens (user_id);
+```
 
--- audit_log
+### 3.19 `audit_log`
+
+_Append-only; also powers the activity feed, FR-37._
+
+```sql
 create table audit_log (
   id          bigint      generated always as identity primary key,
   group_id    uuid,                         -- no FK on purpose: history outlives deletes
@@ -539,8 +978,11 @@ create index audit_log_created_brin    on audit_log using brin (created_at);
 
 create trigger audit_log_append_only before update or delete on audit_log
   for each row execute function forbid_mutation();
+```
 
--- idempotency_keys
+### 3.20 `idempotency_keys`
+
+```sql
 create table idempotency_keys (
   user_id          uuid        not null references users (id) on delete cascade,
   idem_key         text        not null,
@@ -562,8 +1004,11 @@ create table idempotency_keys (
 );
 
 create index idempotency_keys_expires_idx on idempotency_keys (expires_at);
+```
 
--- Deferred invariant: payers and splits must each sum to the total
+### 3.21 Deferred invariant: payers and splits must each sum to the total
+
+```sql
 create or replace function check_expense_balanced() returns trigger
 language plpgsql as $$
 declare
@@ -613,8 +1058,11 @@ create constraint trigger expense_splits_balanced_ct
   after insert or update or delete on expense_splits
   deferrable initially deferred
   for each row execute function check_expense_balanced();
+```
 
--- Views: balances, per currency. Amounts in different currencies are never added together.
+### 3.22 Views: balances per currency (FR-31, FR-32, FR-59)
+
+```sql
 -- net_minor > 0: member should receive money; < 0: member owes money.
 -- Only confirmed settlements move balances; pending ones are shown separately.
 -- Every member gets at least a zero row in their group's default currency.
@@ -670,38 +1118,241 @@ from member_balances mb
 join groups g on g.id = mb.group_id
 where mb.user_id is not null and g.archived_at is null
 group by mb.user_id, mb.currency;
-`;
+```
 
-const DOWN_SQL = String.raw`
-drop view if exists user_balances;
-drop view if exists member_balances;
+---
 
-drop table if exists idempotency_keys;
-drop table if exists audit_log;
-drop table if exists push_tokens;
-drop table if exists comments;
-drop table if exists attachments;
-drop table if exists blocks;
-drop table if exists invites;
-drop table if exists settlements;
-drop table if exists expense_item_assignments;
-drop table if exists expense_items;
-drop table if exists expense_splits;
-drop table if exists expense_payers;
-drop table if exists expenses;
-drop table if exists recurring_expenses;
-drop table if exists group_members;
-drop table if exists groups;
-drop table if exists user_upi_ids;
-drop table if exists users;
-drop table if exists exchange_rates;
-drop table if exists currencies;
+## 4. Index catalogue
 
-drop function if exists check_expense_balanced();
-drop function if exists guard_member_hard_delete();
-drop function if exists forbid_mutation();
-drop function if exists set_updated_at();
+Postgres automatically indexes primary keys and unique constraints, but **not** foreign-key columns. Every foreign key used for joins or cascades below has an explicit index (or is the leading column of one).
 
-drop extension if exists citext;
-drop extension if exists pg_trgm;
-`;
+| Index | Table | Type | Serves |
+|---|---|---|---|
+| `currencies` PK | currencies | PK | Every currency foreign key |
+| `exchange_rates_pk` | exchange_rates | PK `(base, quote, as_of)` | Latest rate for a pair: `order by as_of desc limit 1` |
+| `users_auth_subject_uq` | users | unique | Look up the user from the Auth0 `sub` on every request |
+| `users_email_active_uq` | users | unique, partial | One active account per email; invite by email |
+| `users_phone_active_uq` | users | unique, partial | One active account per phone; invite by phone |
+| `user_upi_ids_user_vpa_uq` | user_upi_ids | unique, expression | No duplicate VPAs per user (case-insensitive) |
+| `user_upi_ids_one_primary_uq` | user_upi_ids | unique, partial | At most one primary UPI ID |
+| `groups_direct_key_uq` | groups | unique | One direct group per pair of users |
+| `groups_created_by_idx` | groups | btree | FK |
+| `group_members_group_id_id_uq` | group_members | unique | Target of all composite member FKs |
+| `group_members_group_user_uq` | group_members | unique | A user joins a group once (rejoin clears `left_at`) |
+| `group_members_one_owner_uq` | group_members | unique, partial | Exactly one active owner per group |
+| `group_members_placeholder_name_uq` | group_members | unique, partial | No two placeholders named "Dev" in one group |
+| `group_members_user_active_idx` | group_members | btree, partial | "My groups" list; RLS membership check |
+| `expenses_id_group_uq` | expenses | unique | Target of composite expense FKs |
+| `expenses_group_date_idx` | expenses | btree, partial | Group feed and bill list, newest first (FR-34) |
+| `expenses_group_category_idx` | expenses | btree, partial | Category filter and monthly summary (FR-36, FR-39) |
+| `expenses_description_trgm_idx` | expenses | GIN trigram, partial | Substring and fuzzy search across groups (FR-35) |
+| `expenses_created_by_idx` | expenses | btree | "Added by me" filter; FK |
+| `expenses_recurring_idx` | expenses | btree, partial | FK to recurring expenses |
+| `expense_payers_pk` | expense_payers | PK | Load payers of an expense |
+| `expense_payers_member_idx` | expense_payers | btree | Balances by member; "expenses involving X" |
+| `expense_splits_pk` | expense_splits | PK | Load splits of an expense |
+| `expense_splits_member_idx` | expense_splits | btree | Balances by member; "expenses involving X" |
+| `expense_items_position_uq` | expense_items | unique | Ordered line items per expense |
+| `expense_item_assignments_member_idx` | expense_item_assignments | btree | FK; items assigned to a member |
+| `settlements_group_created_idx` | settlements | btree | Settlement history per group |
+| `settlements_from_idx` / `settlements_to_idx` | settlements | btree | Balances; "awaiting my confirmation" (FR-44) |
+| `settlements_upi_ref_uq` | settlements | unique, partial | The same UPI transaction can't be recorded twice |
+| `invites_token_hash_uq` | invites | unique | Resolve an invite link |
+| `invites_group_active_idx` | invites | btree, partial | Active invites for a group |
+| `blocks_pk` | blocks | PK | "Has A blocked B?" |
+| `blocks_blocked_idx` | blocks | btree | "Who has blocked me?" before showing invites (FR-27) |
+| `attachments_expense_idx` / `attachments_settlement_idx` | attachments | btree, partial | Load receipts / payment proof |
+| `attachments_expiry_idx` | attachments | btree, partial | Cleanup of parse-only uploads |
+| `comments_expense_idx` | comments | btree, partial | Comments thread per expense |
+| `push_tokens_token_uq` / `push_tokens_user_idx` | push_tokens | unique / btree | Upsert device token; fan-out per user |
+| `audit_log_group_feed_idx` | audit_log | btree, partial | Activity feed, newest first (FR-37) |
+| `audit_log_entity_idx` | audit_log | btree | History of one expense (FR-9) |
+| `audit_log_created_brin` | audit_log | BRIN | Time-range scans on a large append-only table |
+| `recurring_expenses_due_idx` | recurring_expenses | btree, partial | Worker picks schedules that are due |
+| `idempotency_keys_expires_idx` | idempotency_keys | btree | Cleanup of expired keys |
+
+**Note on search (FR-35).** Within a single group, the planner usually prefers `expenses_group_date_idx` and filters a few hundred rows, which is the right call. The trigram index is used for selective searches across all of a user's groups. Testing confirmed both behaviours (section 9).
+
+---
+
+## 5. Common queries and the indexes they use
+
+```sql
+-- My active groups with my net balance in each, per currency (home screen, FR-31)
+select g.id, g.name, g.type, mb.currency, mb.net_minor
+from group_members gm
+join groups g           on g.id = gm.group_id and g.archived_at is null
+join member_balances mb on mb.member_id = gm.id
+where gm.user_id = $1 and gm.left_at is null;                -- group_members_user_active_idx
+
+-- Group bill list, newest first, keyset-paginated (FR-34)
+select id, description, total_minor, currency, expense_date, split_type
+from expenses
+where group_id = $1 and deleted_at is null
+  and (expense_date, created_at) < ($2, $3)                   -- cursor from the previous page
+order by expense_date desc, created_at desc
+limit 30;                                                      -- expenses_group_date_idx
+
+-- Search across all my groups (FR-35)
+select e.id, e.group_id, e.description, e.total_minor, e.currency, similarity(e.description, $2) as score
+from expenses e
+where e.deleted_at is null
+  and e.group_id in (select group_id from group_members where user_id = $1 and left_at is null)
+  and e.description ilike '%' || $2 || '%'                    -- expenses_description_trgm_idx
+order by score desc, e.expense_date desc
+limit 50;
+
+-- Expenses in a group that involve a given member (FR-36)
+select e.*
+from expenses e
+where e.group_id = $1 and e.deleted_at is null
+  and (exists (select 1 from expense_splits s where s.expense_id = e.id and s.member_id = $2)
+    or exists (select 1 from expense_payers p where p.expense_id = e.id and p.member_id = $2))
+order by e.expense_date desc;
+
+-- Payments waiting for my confirmation (FR-44)
+select s.*
+from settlements s
+join group_members gm on gm.id = s.to_member_id
+where gm.user_id = $1 and s.status = 'pending';               -- settlements_to_idx
+
+-- Balances for the simplification step: load per-member nets for each currency,
+-- then run the split-engine's simplifyDebts() in TypeScript once per currency.
+select member_id, currency, net_minor from member_balances where group_id = $1 and net_minor <> 0;
+
+-- Latest rate for a converted view or a suggested cross-currency settlement (FR-62)
+select rate, as_of from exchange_rates
+where base = $1 and quote = $2
+order by as_of desc
+limit 1;                                                       -- exchange_rates_pk
+```
+
+Escape `%` and `_` in user search input before building the `ILIKE` pattern.
+
+---
+
+## 6. Optional: row-level security
+
+Defence in depth on top of the NestJS `GroupMemberGuard`. The API connects as a role that doesn't own the tables, and sets the current user at the start of each transaction:
+
+```sql
+-- once, in a migration
+create role app_user nologin;                     -- the API's login role is granted app_user
+grant select, insert, update on all tables in schema public to app_user;
+
+create or replace function app_current_user_id() returns uuid
+language sql stable as $$
+  select nullif(current_setting('app.user_id', true), '')::uuid
+$$;
+
+-- security definer so policies on group_members don't recurse
+create or replace function is_active_member(p_group_id uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from group_members gm
+    where gm.group_id = p_group_id
+      and gm.user_id  = app_current_user_id()
+      and gm.left_at is null
+  )
+$$;
+
+alter table expenses enable row level security;
+alter table expenses force  row level security;
+create policy expenses_member_select on expenses for select to app_user
+  using (is_active_member(group_id));
+create policy expenses_member_write  on expenses for insert to app_user
+  with check (is_active_member(group_id));
+-- repeat for settlements, expense_payers, expense_splits, invites, ...
+```
+
+```sql
+-- per request, inside the TypeORM transaction (NestJS interceptor)
+set local app.user_id = '<users.id of the caller>';
+```
+
+Behaviour verified in testing: a member sees only their groups' rows, and a connection that hasn't set `app.user_id` sees nothing. With this policy, members who leave a group lose read access to its history; whether they should keep it is open question 1 in the main plan.
+
+---
+
+## 7. TypeORM mapping notes
+
+**Migrations are the source of truth.** This DDL ships as a hand-written migration. Entities mirror it; they don't generate it.
+
+- Keep `synchronize: false` everywhere. When you do run `migration:generate`, it tries to drop objects it doesn't understand (partial and expression indexes, triggers, views), so review every generated file.
+- Mark hand-managed indexes with `@Index('name', { synchronize: false })` so TypeORM leaves them alone.
+- Declare views (`member_balances`, `user_balances`) with `@ViewEntity` pointing at the existing view, or query them with `QueryBuilder`/raw SQL.
+
+**Column types**
+
+| Postgres | TypeORM | JS value |
+|---|---|---|
+| `uuid` | `@PrimaryGeneratedColumn('uuid')` / `@Column('uuid')` | `string` |
+| `bigint` (money, `*_minor`) | `@Column('bigint', { transformer: minorUnitsTransformer })` | `number` (exact; values beyond `Number.MAX_SAFE_INTEGER` are refused) |
+| `numeric(12,4)`, `numeric(24,12)` | `@Column('numeric')` | `string`; pass to the split engine's `parseDecimal`, never `Number()` |
+| `bigint` (audit id) | `@PrimaryColumn('bigint')` | `string` |
+| `citext` | `@Column({ type: 'citext' })` | `string` |
+| `bytea` | `@Column('bytea')` | `Buffer` |
+| `jsonb` | `@Column('jsonb')` | object |
+| `timestamptz` | `@Column('timestamptz')` / `@CreateDateColumn({ type: 'timestamptz' })` | `Date` |
+| `version` | `@VersionColumn()` | `number` |
+
+**Composite foreign keys.** `expense_payers.group_id` takes part in two foreign keys (to the expense and to the member). TypeORM handles a column shared by two relations poorly. Map `groupId`, `expenseId` and `memberId` as plain `@Column`s, add relations with `createForeignKeyConstraints: false` if you want joins, and let the migration own the actual constraints.
+
+**Transactions.** Because the totals check is a deferred constraint trigger, always write an expense, its payers and its splits (and items) inside one `dataSource.transaction(...)`. A failure surfaces at commit as SQLSTATE `23514` (`check_violation`); map that to a 422 response in a NestJS exception filter. Map `23505` (unique) to 409 and `23503` (foreign key) to 422.
+
+**Editing an expense.** Delete and re-insert its payers and splits in the same transaction, bump `version`, and write an `audit_log` row with the before/after amounts.
+
+---
+
+## 8. Data lifecycle and maintenance
+
+| Task | How |
+|---|---|
+| **Account deletion** (FR-52) | Anonymise, don't delete: `name = 'Deleted user'`, `email = null`, `phone = null`, `avatar_url = null`, `auth_subject = 'deleted:' \|\| id`, set `deleted_at`. Delete their `user_upi_ids`, `push_tokens`, `blocks` and `idempotency_keys`. Group history and other people's balances stay intact. |
+| **Leaving / removal** (FR-25, FR-29) | Set `left_at` (and `removed_by`). The guard trigger rejects hard deletes of members. Check the member's `net_minor` in every currency first and block or warn if any is non-zero. |
+| **Claiming a placeholder** (FR-30) | In one transaction: set `user_id` and `claimed_at` on the placeholder row and increment the invite's `use_count`. Fails if the user is already a member of that group (unique constraint). |
+| **Deleting a group** (FR-21) | Hard `DELETE FROM groups` cascades to everything in it. Prefer `archived_at` in the UI; allow hard delete only when all balances are zero. |
+| **Parse-only receipt uploads** | Rows with no expense or settlement must have `expires_at`. A worker job deletes the S3 object and the row after expiry (e.g. 24 hours). |
+| **Idempotency keys** | Worker job: `delete from idempotency_keys where expires_at < now()`. |
+| **Audit log PII** | Store IDs and amounts in `diff`, never names or phone numbers, so anonymising `users` is enough. If the table ever grows large, partition it by month. |
+| **Exchange rates** | Keep history (it explains past settlement suggestions); a worker job adds new rates daily. Delete very old rows only if the table grows large. |
+| **Adding a currency** | Add it to `CURRENCIES` in the split engine and insert it in a new migration; the integration test fails if the two disagree. |
+| **UUID ordering** | On PostgreSQL 18+, consider `uuidv7()` as the default for time-ordered keys and better index locality. |
+
+---
+
+## 9. Verification
+
+`pnpm test:int` creates a throwaway PostgreSQL 16 database, runs the migration, and checks each of these (27 tests, run in CI against a Postgres service):
+
+| Test | Expected |
+|---|---|
+| ₹100 split 3 ways as 3334 / 3333 / 3333, committed | Accepted |
+| Splits a paisa short of the total | Rejected at `COMMIT` with `check_violation` |
+| Restoring a soft-deleted expense whose total no longer matches | Rejected at `COMMIT` |
+| Split assigned to a member of a different group | Foreign-key violation |
+| Second active owner in a group | Unique violation |
+| Placeholder member as owner | Check violation |
+| Hard-deleting a single member | Rejected by guard trigger |
+| Hard-deleting a whole group | Cascades to members, expenses, settlements |
+| Settlement from a member to themselves | Check violation |
+| Settlement with `status = 'confirmed'` but no `confirmed_at` | Check violation |
+| Same UPI reference recorded twice in a group | Unique violation |
+| `member_balances` after one expense, one confirmed and one pending settlement | +3333 / 0 / −3333; pending shown separately |
+| Members with no activity | One zero row each in the group's default currency |
+| Soft-deleting an expense | Removed from balances |
+| Seeded currencies | Exactly the split engine's list, with the same minor units |
+| Expense in an unknown currency | Foreign-key violation |
+| INR and USD expenses in one group | Separate balances per currency, each summing to zero |
+| USD debt settled by an INR UPI payment | USD balance cleared; no INR balance created |
+| UPI payment in USD | Check violation; the same payment in cash is accepted |
+| Paid amount without paid currency, or paid in the same currency | Check violation |
+| IDR expense of 5,000,000,000 minor units | Stored and balanced exactly (beyond 32-bit range) |
+| Invalid VPA, invalid phone, unattached upload without expiry | Each rejected by its check |
+| Two primary UPI IDs for one user | Unique violation |
+| `UPDATE` or `DELETE` on `audit_log` | Rejected (append-only) |
+| Migration down, then up again | Clean revert and re-apply |
+
+The split engine's own tests (`pnpm test`) cover the arithmetic: decimal parsing, rounding modes, conversions between currencies with different exponents, every split type, and fast-check properties (splits sum exactly to the total; each part within one minor unit of its exact share; deterministic).
+
+Not yet covered by automated tests: the row-level security policies in section 6 (optional, not in the migration) and query plans for the indexes in section 4. The first draft of this document verified both by hand on PostgreSQL 16: the group feed used `expenses_group_date_idx` on 20,000 expenses, word search used `expenses_description_trgm_idx`, and RLS showed members only their own groups.

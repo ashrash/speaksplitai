@@ -1,8 +1,9 @@
 # SpeakSplit Pay
 
 A Splitwise-style expense-splitting app built for India. Add an expense by typing a sentence,
-speaking it, or photographing the bill; split it any way you like, to the paisa; and settle up
-through a prefilled UPI payment link.
+speaking it, or photographing the bill; split it any way you like, exact to the smallest unit
+of the currency; and settle up through a prefilled UPI payment link. Trips abroad work too:
+expenses can be in any supported currency.
 
 > Personal / learning project for use within a group of friends. SpeakSplit Pay never holds or
 > moves money: payments happen in the user's own UPI app.
@@ -28,13 +29,24 @@ Priority: **MVP** = first release, **Next** = soon after, **Later** = backlog.
 
 ### Split types
 
-| Feature                                                                         | Priority |
-| ------------------------------------------------------------------------------- | -------- |
-| Equal, exact amounts, percentages, shares                                       | MVP      |
-| Payer who isn't a participant (paid on someone's behalf)                        | MVP      |
-| Deterministic handling of leftover paise (₹100 among 3 = 33.34 / 33.33 / 33.33) | MVP      |
-| Adjustment splits (equal ± fixed amounts) and multiple payers                   | Next     |
-| Usage-weighted splits (electricity by AC hours, rent by room size)              | Later    |
+| Feature                                                                               | Priority |
+| ------------------------------------------------------------------------------------- | -------- |
+| Equal, exact amounts, percentages, shares                                             | MVP      |
+| Payer who isn't a participant (paid on someone's behalf)                              | MVP      |
+| Deterministic handling of leftover minor units (₹100 among 3 = 33.34 / 33.33 / 33.33) | MVP      |
+| Adjustment splits (equal ± fixed amounts) and multiple payers                         | Next     |
+| Usage-weighted splits (electricity by AC hours, rent by room size)                    | Later    |
+
+### Currencies
+
+| Feature                                                                                        | Priority |
+| ---------------------------------------------------------------------------------------------- | -------- |
+| Expenses in any supported currency (INR default; USD, EUR, AED, THB, JPY, KWD and more)        | MVP      |
+| Balances kept separately per currency, never silently converted                                | MVP      |
+| Group and personal default currency                                                            | MVP      |
+| Settle a foreign-currency debt in rupees over UPI, recording the rupee amount actually sent    | MVP      |
+| Converted "about ₹X in total" view and suggested settlement amounts from stored exchange rates | Next     |
+| Daily exchange-rate updates by the worker                                                      | Next     |
 
 ### Groups and people
 
@@ -96,8 +108,8 @@ Priority: **MVP** = first release, **Next** = soon after, **Later** = backlog.
 
 Principles:
 
-- **Money is integer paise**, never floating point. The same split engine runs on the phone,
-  the web page and the server.
+- **Money is an integer count of the currency's smallest unit** (paise, cents, yen, fils), never
+  floating point. The same split engine runs on the phone, the web page and the server.
 - **The database guards the money.** Payers and splits must each add up to the expense total,
   rows can't cross groups, and the audit log can't be edited. Postgres enforces all of this,
   not just the application.
@@ -109,28 +121,48 @@ Principles:
 
 ## Data model
 
-All amounts are integer paise. Balances are computed from expenses and settlements, never
+Every amount is a `bigint` column named `*_minor` holding the currency's smallest unit, next to
+the currency it is in. Balances are computed from expenses and settlements per currency, never
 stored as editable numbers.
 
-| Table                                       | Holds                                                                                                                                 |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `users`, `user_upi_ids`                     | Accounts (linked to Auth0) and their UPI IDs (one primary)                                                                            |
-| `groups`, `group_members`                   | Groups and their members. A member may be a placeholder with no account yet. Friend-to-friend expenses live in hidden `direct` groups |
-| `expenses`                                  | Description, total, date, split type, source (manual, text, voice, image)                                                             |
-| `expense_payers`, `expense_splits`          | Who paid and who owes how much, per member                                                                                            |
-| `expense_items`, `expense_item_assignments` | Receipt line items and who shares each one                                                                                            |
-| `settlements`                               | Payments between members: UPI or cash; pending, confirmed, disputed or cancelled                                                      |
-| `recurring_expenses`                        | Schedules that generate expenses                                                                                                      |
-| `invites`, `blocks`                         | Invite links (hashed tokens) and user blocks                                                                                          |
-| `attachments`, `comments`                   | Receipts and payment proofs (in S3); comments on expenses                                                                             |
-| `push_tokens`                               | Device tokens for notifications                                                                                                       |
-| `audit_log`                                 | Append-only history, also the activity feed                                                                                           |
-| `idempotency_keys`                          | Makes create-expense and record-payment safe to retry                                                                                 |
-| `member_balances`, `user_balances` (views)  | Net balance per member and per user                                                                                                   |
+| Table                                       | Holds                                                                                                                                                           |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `currencies`                                | ISO 4217 codes and how many decimal places each has (INR 2, JPY 0, KWD 3)                                                                                       |
+| `exchange_rates`                            | Dated rates for converted views and settlement suggestions; balances never use them                                                                             |
+| `users`, `user_upi_ids`                     | Accounts (linked to Auth0) and their UPI IDs (one primary)                                                                                                      |
+| `groups`, `group_members`                   | Groups (with a default currency) and their members. A member may be a placeholder with no account yet. Friend-to-friend expenses live in hidden `direct` groups |
+| `expenses`                                  | Description, total and its currency, date, split type, source (manual, text, voice, image)                                                                      |
+| `expense_payers`, `expense_splits`          | Who paid and who owes how much, per member                                                                                                                      |
+| `expense_items`, `expense_item_assignments` | Receipt line items and who shares each one                                                                                                                      |
+| `settlements`                               | Payments between members: the debt cleared (amount + currency), and what was actually sent if it was another currency; UPI only in INR                          |
+| `recurring_expenses`                        | Schedules that generate expenses                                                                                                                                |
+| `invites`, `blocks`                         | Invite links (hashed tokens) and user blocks                                                                                                                    |
+| `attachments`, `comments`                   | Receipts and payment proofs (in S3); comments on expenses                                                                                                       |
+| `push_tokens`                               | Device tokens for notifications                                                                                                                                 |
+| `audit_log`                                 | Append-only history, also the activity feed                                                                                                                     |
+| `idempotency_keys`                          | Makes create-expense and record-payment safe to retry                                                                                                           |
+| `member_balances`, `user_balances` (views)  | Net balance per member and per user, one row per currency                                                                                                       |
 
 Other guarantees: expenses and comments are soft-deleted, members leave rather than being
 deleted, and optimistic locking (`version` columns) stops two people silently overwriting the
 same expense.
+
+### Money and rounding
+
+- **Stored amounts are integers in minor units**, so every stored value is exact to the
+  smallest unit of its currency. They are `bigint` in Postgres and safe integers in JavaScript
+  (up to about 90 trillion rupees); anything larger is rejected, not rounded.
+- **Decimal inputs never touch a float.** Percentages, shares, exchange rates and typed amounts
+  are parsed from their decimal text into exact integers (`bigint`) before any arithmetic.
+- **Amounts typed with too many decimals are rejected** (₹1.005, ¥10.5) unless a caller asks
+  for a specific rounding mode, for example when reading a receipt.
+- **Splits always add up exactly.** Each person gets the whole-unit part of their exact share;
+  the few leftover units go one each to the largest remainders, ties going to the earlier
+  member in a stable order. Everyone is within one minor unit of their exact share.
+- **Currency conversion rounds once**, at the end, half-to-even, and only for display or
+  suggested settlement amounts. Balances stay in the currency the money was spent in.
+- **The database checks it too:** payers and splits must sum exactly to the total, currencies
+  must exist, and UPI payments must be in INR.
 
 ### Data lifecycle
 
@@ -152,11 +184,10 @@ apps/
   pay-web/        Vite + React web pay page
   mobile/         Expo app (not generated yet)
 packages/
-  split-engine/   shared, dependency-free split and balance logic
+  split-engine/   shared, dependency-free money, split and balance logic
   api-types/      zod schemas shared by the API and clients
-services/
-  go-service/     optional Go service
 deploy/           docker-compose, Helm, Argo CD, Terraform
+docs/             product plan and schema design
 ```
 
 ## Getting started
@@ -179,17 +210,47 @@ pnpm format:check && pnpm lint && pnpm build && pnpm typecheck && pnpm test
 pnpm test:int                           # database integration tests; needs TEST_DATABASE_URL
 ```
 
-## Roadmap
+## MVP checklist
 
-1. ~~Monorepo scaffolding~~
-2. ~~Database schema and migrations~~
-3. Split engine and its tests
-4. API: Auth0 JWT validation, group-scoped access, expenses, balances
-5. Mobile app: login, groups, manual expenses, balances, UPI settle
-6. Invites, roles, block/unblock
-7. Web pay page and single sign-on
-8. AI text parsing, then voice
-9. Receipt photos and itemised splits
-10. Search, filters, activity feed, push reminders
-11. Kubernetes (Helm, k3s), then Terraform + Argo CD + EKS
-12. On-device AI
+- [x] Monorepo scaffolding, CI, local Docker Compose stack
+- [x] Database schema and migrations, with integration tests for the money rules
+- [x] Multi-currency support in the schema
+- [ ] Split engine
+  - [x] Exact money maths: currencies, decimal parsing, conversion, rounding
+  - [x] Equal, exact, percent, shares and adjustment splits with property-based tests
+  - [ ] Net balances from expenses and settlements, per currency
+  - [ ] Debt simplification (fewest transfers), per currency
+- [ ] API foundation
+  - [ ] Auth0 token validation; create the user on first request
+  - [ ] Group membership check on every group-scoped endpoint
+  - [ ] Database errors mapped to HTTP errors; request IDs and structured logs
+  - [ ] Idempotency keys for creating expenses and recording payments
+  - [ ] TypeORM entities mirroring the migration; shared request/response schemas
+  - [ ] Test that one user can't read or change another group's data
+- [ ] API features
+  - [ ] Profile and UPI IDs
+  - [ ] Groups: create, rename, archive, delete; default currency
+  - [ ] Friend-to-friend expenses
+  - [ ] Invite links; join; remove members (blocked while they have a balance)
+  - [ ] Expenses: create, edit, delete, with audit history
+  - [ ] Balances per group and overall, with simplified debts
+  - [ ] Record a payment (UPI or cash, including paying a foreign-currency debt in INR)
+- [ ] Text-to-split: `POST /expenses/parse` with name anonymisation and split-engine validation
+- [ ] Auth0 tenant: mobile app, API audience, email OTP and Google sign-in
+- [ ] Mobile app: login, groups, add expense (form and text with review), expense detail,
+      invites, profile, settle up via UPI
+- [ ] Ship to friends: VM with Docker Compose and TLS, nightly backups, Android APK, testing UPI
+      links on real phones
+
+Decisions still open: whether recorded payments count immediately or wait for the payee to
+confirm, whether every member sees every expense in a group, whether partial payments are
+allowed, which AI provider to use, and whether members who leave keep access to history.
+
+## After the MVP
+
+1. Roles, placeholders, block/unblock, payee confirmation of payments
+2. Web pay page and single sign-on
+3. Voice entry, receipt photos and itemised splits
+4. Search, filters, activity feed, push reminders, converted currency views
+5. Kubernetes (Helm, k3s), then Terraform + Argo CD + EKS
+6. On-device AI
