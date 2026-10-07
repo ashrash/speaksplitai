@@ -1,0 +1,16 @@
+{
+  "name": "@speaksplit/worker",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Background jobs (BullMQ): reminders, push, AI parsing, cleanup.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@speaksplit/split-engine": "workspace:*"
+  }
+}

@@ -1,0 +1,56 @@
+# Local dev infrastructure: `pnpm dev:infra` from the repo root.
+name: speaksplit
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: speaksplit
+      POSTGRES_PASSWORD: speaksplit
+      POSTGRES_DB: speaksplit
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U speaksplit -d speaksplit']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: speaksplit
+      MINIO_ROOT_PASSWORD: speaksplit-secret
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio-data:/data
+
+  # Creates the receipts bucket once MinIO is up.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 speaksplit speaksplit-secret; do sleep 1; done;
+      mc mb --ignore-existing local/speaksplit-receipts;
+      "
+
+volumes:
+  postgres-data:
+  minio-data:
