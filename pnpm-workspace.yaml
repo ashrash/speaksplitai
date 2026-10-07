@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - packages/*
+
+onlyBuiltDependencies:
+  - '@swc/core'
+  - esbuild
+
+# One TypeScript for every tool (tsup, nest, ts-jest-style peers).
+overrides:
+  typescript: ~5.9.3

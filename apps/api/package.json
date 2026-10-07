@@ -1,0 +1,37 @@
+{
+  "name": "@speaksplit/api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "NestJS + TypeORM REST API.",
+  "type": "module",
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "migration:run": "typeorm migration:run -d dist/database/data-source.js",
+    "migration:revert": "typeorm migration:revert -d dist/database/data-source.js",
+    "migration:create": "typeorm migration:create"
+  },
+  "dependencies": {
+    "@nestjs/common": "^12.0.0",
+    "@nestjs/config": "^12.0.0",
+    "@nestjs/core": "^12.0.0",
+    "@nestjs/platform-express": "^12.0.0",
+    "@nestjs/typeorm": "^12.0.0",
+    "@speaksplit/api-types": "workspace:*",
+    "@speaksplit/split-engine": "workspace:*",
+    "pg": "^8.16.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.0",
+    "typeorm": "^1.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^12.0.0",
+    "@nestjs/testing": "^12.0.0",
+    "@swc/core": "^1.13.0",
+    "unplugin-swc": "^2.0.0"
+  }
+}
