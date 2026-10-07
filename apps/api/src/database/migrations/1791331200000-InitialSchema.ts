@@ -3,10 +3,12 @@ import type { MigrationInterface, QueryRunner } from 'typeorm';
 /**
  * Initial schema: every table, constraint, index, trigger and view.
  *
- * Money is integer paise. Payers, splits, item assignments and settlements reference
+ * Money is a bigint count of the currency's minor unit (paise, cents, yen, fils), named *_minor.
+ * Each expense and settlement carries its own currency; balances are kept per currency and are
+ * never silently converted. Payers, splits, item assignments and settlements reference
  * group_members.id (so placeholder members work), and composite foreign keys keep them inside
  * the expense's group. A deferred constraint trigger checks at COMMIT that payers and splits each
- * sum to expenses.total_paise, so always write an expense and its rows in one transaction.
+ * sum to expenses.total_minor, so always write an expense and its rows in one transaction.
  */
 export class InitialSchema1791331200000 implements MigrationInterface {
   name = 'InitialSchema1791331200000';
@@ -22,8 +24,8 @@ export class InitialSchema1791331200000 implements MigrationInterface {
 
 // String.raw keeps the regex backslashes in CHECK constraints intact.
 const UP_SQL = String.raw`
--- 3.1 Extensions and helpers
-create extension if not exists pg_trgm;   -- fuzzy / substring search (FR-35)
+-- Extensions and helpers
+create extension if not exists pg_trgm;   -- fuzzy / substring search
 create extension if not exists citext;    -- case-insensitive email
 
 create or replace function set_updated_at() returns trigger
@@ -40,7 +42,65 @@ begin
     using errcode = 'insufficient_privilege';
 end $$;
 
--- 3.2 users
+-- currencies: ISO 4217 codes and their minor-unit exponent (INR 2, JPY 0, KWD 3).
+-- Keep in sync with CURRENCIES in packages/split-engine/src/currency.ts.
+create table currencies (
+  code        char(3)  primary key,
+  minor_unit  smallint not null,
+  name        text     not null,
+
+  constraint currencies_code_ck       check (code ~ '^[A-Z]{3}$'),
+  constraint currencies_minor_unit_ck check (minor_unit between 0 and 4)
+);
+
+insert into currencies (code, minor_unit, name) values
+  ('AED', 2, 'UAE Dirham'),
+  ('AUD', 2, 'Australian Dollar'),
+  ('BDT', 2, 'Bangladeshi Taka'),
+  ('BHD', 3, 'Bahraini Dinar'),
+  ('BTN', 2, 'Bhutanese Ngultrum'),
+  ('CAD', 2, 'Canadian Dollar'),
+  ('CHF', 2, 'Swiss Franc'),
+  ('CNY', 2, 'Chinese Yuan'),
+  ('EUR', 2, 'Euro'),
+  ('GBP', 2, 'Pound Sterling'),
+  ('HKD', 2, 'Hong Kong Dollar'),
+  ('IDR', 2, 'Indonesian Rupiah'),
+  ('INR', 2, 'Indian Rupee'),
+  ('JPY', 0, 'Japanese Yen'),
+  ('KRW', 0, 'South Korean Won'),
+  ('KWD', 3, 'Kuwaiti Dinar'),
+  ('LKR', 2, 'Sri Lankan Rupee'),
+  ('MVR', 2, 'Maldivian Rufiyaa'),
+  ('MYR', 2, 'Malaysian Ringgit'),
+  ('NPR', 2, 'Nepalese Rupee'),
+  ('NZD', 2, 'New Zealand Dollar'),
+  ('OMR', 3, 'Omani Rial'),
+  ('PHP', 2, 'Philippine Peso'),
+  ('QAR', 2, 'Qatari Riyal'),
+  ('SAR', 2, 'Saudi Riyal'),
+  ('SGD', 2, 'Singapore Dollar'),
+  ('THB', 2, 'Thai Baht'),
+  ('USD', 2, 'US Dollar'),
+  ('VND', 0, 'Vietnamese Dong'),
+  ('ZAR', 2, 'South African Rand');
+
+-- exchange_rates: for showing converted totals and suggesting cross-currency settlement amounts.
+-- Balances themselves are never converted.
+create table exchange_rates (
+  base        char(3)        not null references currencies (code),
+  quote       char(3)        not null references currencies (code),
+  rate        numeric(24,12) not null,                   -- units of quote per one unit of base
+  as_of       timestamptz    not null,
+  source      text           not null,
+  created_at  timestamptz    not null default now(),
+
+  constraint exchange_rates_pk          primary key (base, quote, as_of),
+  constraint exchange_rates_distinct_ck check (base <> quote),
+  constraint exchange_rates_rate_ck     check (rate > 0)
+);
+
+-- users
 create table users (
   id                uuid        primary key default gen_random_uuid(),
   auth_subject      text        not null,                 -- Auth0 'sub' claim
@@ -49,7 +109,7 @@ create table users (
   phone             text,                                  -- E.164
   avatar_url        text,
   locale            text        not null default 'en-IN',
-  default_currency  char(3)     not null default 'INR',
+  default_currency  char(3)     not null default 'INR' references currencies (code),
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   deleted_at        timestamptz,
@@ -59,8 +119,7 @@ create table users (
   constraint users_email_ck        check (email is null or email ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
   constraint users_phone_e164_ck   check (phone is null or phone ~ '^\+[1-9][0-9]{7,14}$'),
   constraint users_avatar_https_ck check (avatar_url is null or avatar_url ~ '^https://'),
-  constraint users_locale_ck       check (locale ~ '^[a-z]{2}(-[A-Z]{2})?$'),
-  constraint users_currency_ck     check (default_currency ~ '^[A-Z]{3}$')
+  constraint users_locale_ck       check (locale ~ '^[a-z]{2}(-[A-Z]{2})?$')
 );
 
 create unique index users_email_active_uq on users (email) where email is not null and deleted_at is null;
@@ -69,7 +128,7 @@ create unique index users_phone_active_uq on users (phone) where phone is not nu
 create trigger users_set_updated_at before update on users
   for each row execute function set_updated_at();
 
--- 3.3 user_upi_ids
+-- user_upi_ids
 create table user_upi_ids (
   id          uuid        primary key default gen_random_uuid(),
   user_id     uuid        not null references users (id) on delete cascade,
@@ -85,23 +144,22 @@ create table user_upi_ids (
 create unique index user_upi_ids_user_vpa_uq     on user_upi_ids (user_id, lower(vpa));
 create unique index user_upi_ids_one_primary_uq  on user_upi_ids (user_id) where is_primary;
 
--- 3.4 groups
+-- groups
 create table groups (
-  id              uuid        primary key default gen_random_uuid(),
-  name            text        not null,
-  type            text        not null default 'friends',
-  currency        char(3)     not null default 'INR',
-  simplify_debts  boolean     not null default true,
-  direct_key      text,                                    -- '<uuidA>:<uuidB>' sorted, only for type='direct'
-  created_by      uuid        not null references users (id),
-  version         integer     not null default 1,          -- optimistic locking
-  created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now(),
-  archived_at     timestamptz,
+  id               uuid        primary key default gen_random_uuid(),
+  name             text        not null,
+  type             text        not null default 'friends',
+  default_currency char(3)     not null default 'INR' references currencies (code),
+  simplify_debts   boolean     not null default true,
+  direct_key       text,                                    -- '<uuidA>:<uuidB>' sorted, only for type='direct'
+  created_by       uuid        not null references users (id),
+  version          integer     not null default 1,          -- optimistic locking
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  archived_at      timestamptz,
 
   constraint groups_name_len_ck   check (char_length(btrim(name)) between 1 and 100),
   constraint groups_type_ck       check (type in ('trip','flat','couple','friends','event','other','direct')),
-  constraint groups_currency_ck   check (currency ~ '^[A-Z]{3}$'),
   constraint groups_direct_key_ck check ((type = 'direct') = (direct_key is not null)),
   constraint groups_direct_key_uq unique (direct_key)
 );
@@ -111,7 +169,7 @@ create index groups_created_by_idx on groups (created_by);
 create trigger groups_set_updated_at before update on groups
   for each row execute function set_updated_at();
 
--- 3.5 group_members
+-- group_members
 create table group_members (
   id                uuid        primary key default gen_random_uuid(),
   group_id          uuid        not null references groups (id) on delete cascade,
@@ -157,7 +215,7 @@ end $$;
 create trigger group_members_no_hard_delete before delete on group_members
   for each row execute function guard_member_hard_delete();
 
--- 3.6 recurring_expenses (P2)
+-- recurring_expenses
 create table recurring_expenses (
   id           uuid        primary key default gen_random_uuid(),
   group_id     uuid        not null references groups (id) on delete cascade,
@@ -181,15 +239,15 @@ create index recurring_expenses_group_idx on recurring_expenses (group_id);
 create trigger recurring_expenses_set_updated_at before update on recurring_expenses
   for each row execute function set_updated_at();
 
--- 3.7 expenses
+-- expenses
 create table expenses (
   id                    uuid        primary key default gen_random_uuid(),
   group_id              uuid        not null references groups (id) on delete cascade,
   description           text        not null,
   category              text,
   notes                 text,
-  total_paise           integer     not null,
-  currency              char(3)     not null default 'INR',
+  total_minor           bigint      not null,
+  currency              char(3)     not null references currencies (code),
   expense_date          date        not null default current_date,
   split_type            text        not null,
   source                text        not null default 'manual',
@@ -205,8 +263,7 @@ create table expenses (
   constraint expenses_id_group_uq        unique (id, group_id),               -- target for composite FKs
   constraint expenses_description_len_ck check (char_length(btrim(description)) between 1 and 200),
   constraint expenses_notes_len_ck       check (notes is null or char_length(notes) <= 2000),
-  constraint expenses_total_ck           check (total_paise > 0),
-  constraint expenses_currency_ck        check (currency ~ '^[A-Z]{3}$'),
+  constraint expenses_total_ck           check (total_minor > 0),
   constraint expenses_date_ck            check (expense_date >= date '2000-01-01'),
   constraint expenses_split_type_ck      check (split_type in ('equal','exact','percent','shares','adjustment','itemized')),
   constraint expenses_source_ck          check (source in ('manual','text','voice','image','image_text','recurring')),
@@ -226,44 +283,44 @@ create index expenses_recurring_idx        on expenses (recurring_expense_id) wh
 create trigger expenses_set_updated_at before update on expenses
   for each row execute function set_updated_at();
 
--- 3.8 expense_payers
+-- expense_payers
 create table expense_payers (
   expense_id  uuid    not null,
   group_id    uuid    not null,
   member_id   uuid    not null,
-  paid_paise  integer not null,
+  paid_minor  bigint  not null,
 
   constraint expense_payers_pk         primary key (expense_id, member_id),
   constraint expense_payers_expense_fk foreign key (expense_id, group_id)
                                        references expenses (id, group_id) on delete cascade,
   constraint expense_payers_member_fk  foreign key (group_id, member_id)
                                        references group_members (group_id, id) on delete cascade,
-  constraint expense_payers_amount_ck  check (paid_paise > 0)
+  constraint expense_payers_amount_ck  check (paid_minor > 0)
 );
 
 create index expense_payers_member_idx on expense_payers (group_id, member_id);
 
--- 3.9 expense_splits
+-- expense_splits
 create table expense_splits (
   expense_id        uuid          not null,
   group_id          uuid          not null,
   member_id         uuid          not null,
-  owed_paise        integer       not null,
+  owed_minor        bigint        not null,
   share_value       numeric(12,4),           -- input: percent or share units
-  adjustment_paise  integer,                 -- input: +/- for adjustment splits
+  adjustment_minor  bigint,                  -- input: +/- for adjustment splits
 
   constraint expense_splits_pk         primary key (expense_id, member_id),
   constraint expense_splits_expense_fk foreign key (expense_id, group_id)
                                        references expenses (id, group_id) on delete cascade,
   constraint expense_splits_member_fk  foreign key (group_id, member_id)
                                        references group_members (group_id, id) on delete cascade,
-  constraint expense_splits_owed_ck    check (owed_paise >= 0),
+  constraint expense_splits_owed_ck    check (owed_minor >= 0),
   constraint expense_splits_share_ck   check (share_value is null or share_value >= 0)
 );
 
 create index expense_splits_member_idx on expense_splits (group_id, member_id);
 
--- 3.10 expense_items + expense_item_assignments
+-- expense_items + expense_item_assignments
 create table expense_items (
   id            uuid          primary key default gen_random_uuid(),
   expense_id    uuid          not null,
@@ -272,7 +329,7 @@ create table expense_items (
   kind          text          not null default 'item',
   name          text          not null,
   quantity      numeric(10,3) not null default 1,
-  amount_paise  integer       not null,     -- line total; discounts are positive and subtracted by kind
+  amount_minor  bigint        not null,     -- line total; discounts are positive and subtracted by kind
 
   constraint expense_items_id_group_uq   unique (id, group_id),
   constraint expense_items_position_uq   unique (expense_id, position),
@@ -281,7 +338,7 @@ create table expense_items (
   constraint expense_items_kind_ck       check (kind in ('item','tax','tip','service_charge','delivery','discount','other')),
   constraint expense_items_name_len_ck   check (char_length(btrim(name)) between 1 and 120),
   constraint expense_items_quantity_ck   check (quantity > 0),
-  constraint expense_items_amount_ck     check (amount_paise >= 0),
+  constraint expense_items_amount_ck     check (amount_minor >= 0),
   constraint expense_items_position_ck   check (position >= 0)
 );
 
@@ -301,31 +358,36 @@ create table expense_item_assignments (
 
 create index expense_item_assignments_member_idx on expense_item_assignments (group_id, member_id);
 
--- 3.11 settlements
+-- settlements
 create table settlements (
-  id               uuid        primary key default gen_random_uuid(),
-  group_id         uuid        not null references groups (id) on delete cascade,
-  from_member_id   uuid        not null,
-  to_member_id     uuid        not null,
-  amount_paise     integer     not null,
-  currency         char(3)     not null default 'INR',
-  method           text        not null default 'upi',
-  upi_ref          text,
-  note             text,
-  status           text        not null default 'pending',
-  disputed_reason  text,
-  created_by       uuid        not null references users (id),
-  confirmed_by     uuid        references users (id),
-  confirmed_at     timestamptz,
-  version          integer     not null default 1,
-  created_at       timestamptz not null default now(),
-  updated_at       timestamptz not null default now(),
+  id                 uuid        primary key default gen_random_uuid(),
+  group_id           uuid        not null references groups (id) on delete cascade,
+  from_member_id     uuid        not null,
+  to_member_id       uuid        not null,
+  amount_minor       bigint      not null,                -- debt cleared, in currency
+  currency           char(3)     not null references currencies (code),
+  paid_amount_minor  bigint,                               -- what was actually sent, if in another currency
+  paid_currency      char(3)     references currencies (code),
+  method             text        not null default 'upi',
+  upi_ref            text,
+  note               text,
+  status             text        not null default 'pending',
+  disputed_reason    text,
+  created_by         uuid        not null references users (id),
+  confirmed_by       uuid        references users (id),
+  confirmed_at       timestamptz,
+  version            integer     not null default 1,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
 
   constraint settlements_from_fk         foreign key (group_id, from_member_id) references group_members (group_id, id) on delete cascade,
   constraint settlements_to_fk           foreign key (group_id, to_member_id)   references group_members (group_id, id) on delete cascade,
   constraint settlements_distinct_ck     check (from_member_id <> to_member_id),
-  constraint settlements_amount_ck       check (amount_paise > 0),
-  constraint settlements_currency_ck     check (currency ~ '^[A-Z]{3}$'),
+  constraint settlements_amount_ck       check (amount_minor > 0),
+  constraint settlements_paid_ck         check ((paid_currency is null) = (paid_amount_minor is null)),
+  constraint settlements_paid_amount_ck  check (paid_amount_minor is null or paid_amount_minor > 0),
+  constraint settlements_paid_curr_ck    check (paid_currency is null or paid_currency <> currency),
+  constraint settlements_upi_inr_ck      check (method <> 'upi' or coalesce(paid_currency, currency) = 'INR'),
   constraint settlements_method_ck       check (method in ('upi','cash','bank_transfer','other')),
   constraint settlements_status_ck       check (status in ('pending','confirmed','disputed','cancelled')),
   constraint settlements_upi_ref_ck      check (upi_ref is null or upi_ref ~ '^[A-Za-z0-9]{6,35}$'),
@@ -345,14 +407,14 @@ create unique index settlements_upi_ref_uq on settlements (group_id, upi_ref)
 create trigger settlements_set_updated_at before update on settlements
   for each row execute function set_updated_at();
 
--- 3.12 invites
+-- invites
 create table invites (
   id                     uuid        primary key default gen_random_uuid(),
   group_id               uuid        not null references groups (id) on delete cascade,
   token_hash             bytea       not null,               -- sha256(token); raw token only in the link
   target_email           citext,
   target_phone           text,
-  placeholder_member_id  uuid,                               -- invite to claim a placeholder (FR-30)
+  placeholder_member_id  uuid,                               -- invite to claim a placeholder
   created_by             uuid        not null references users (id),
   max_uses               integer,
   use_count              integer     not null default 0,
@@ -373,7 +435,7 @@ create table invites (
 
 create index invites_group_active_idx on invites (group_id) where revoked_at is null;
 
--- 3.13 blocks
+-- blocks
 create table blocks (
   blocker_id  uuid        not null references users (id) on delete cascade,
   blocked_id  uuid        not null references users (id) on delete cascade,
@@ -387,7 +449,7 @@ create table blocks (
 
 create index blocks_blocked_idx on blocks (blocked_id);
 
--- 3.14 attachments
+-- attachments
 create table attachments (
   id             uuid        primary key default gen_random_uuid(),
   uploaded_by    uuid        not null references users (id),
@@ -419,7 +481,7 @@ create index attachments_expense_idx    on attachments (expense_id)    where exp
 create index attachments_settlement_idx on attachments (settlement_id) where settlement_id is not null;
 create index attachments_expiry_idx     on attachments (expires_at)    where expires_at is not null;
 
--- 3.15 comments (P2)
+-- comments
 create table comments (
   id          uuid        primary key default gen_random_uuid(),
   expense_id  uuid        not null references expenses (id) on delete cascade,
@@ -436,7 +498,7 @@ create table comments (
 create index comments_expense_idx on comments (expense_id, created_at) where deleted_at is null;
 create index comments_author_idx  on comments (author_id);
 
--- 3.16 push_tokens
+-- push_tokens
 create table push_tokens (
   id            uuid        primary key default gen_random_uuid(),
   user_id       uuid        not null references users (id) on delete cascade,
@@ -453,7 +515,7 @@ create table push_tokens (
 
 create index push_tokens_user_idx on push_tokens (user_id);
 
--- 3.17 audit_log
+-- audit_log
 create table audit_log (
   id          bigint      generated always as identity primary key,
   group_id    uuid,                         -- no FK on purpose: history outlives deletes
@@ -478,7 +540,7 @@ create index audit_log_created_brin    on audit_log using brin (created_at);
 create trigger audit_log_append_only before update or delete on audit_log
   for each row execute function forbid_mutation();
 
--- 3.18 idempotency_keys
+-- idempotency_keys
 create table idempotency_keys (
   user_id          uuid        not null references users (id) on delete cascade,
   idem_key         text        not null,
@@ -501,21 +563,21 @@ create table idempotency_keys (
 
 create index idempotency_keys_expires_idx on idempotency_keys (expires_at);
 
--- 3.19 Deferred invariant: payers and splits must each sum to the total
+-- Deferred invariant: payers and splits must each sum to the total
 create or replace function check_expense_balanced() returns trigger
 language plpgsql as $$
 declare
   r          record;
   v_id       uuid;
-  v_total    integer;
+  v_total    bigint;
   v_deleted  timestamptz;
-  v_paid     bigint;
-  v_owed     bigint;
+  v_paid     numeric;
+  v_owed     numeric;
 begin
   if tg_op = 'DELETE' then r := old; else r := new; end if;
   if tg_table_name = 'expenses' then v_id := r.id; else v_id := r.expense_id; end if;
 
-  select total_paise, deleted_at into v_total, v_deleted
+  select total_minor, deleted_at into v_total, v_deleted
   from expenses where id = v_id;
 
   -- expense removed in the same transaction, or soft-deleted: nothing to check
@@ -523,22 +585,22 @@ begin
     return null;
   end if;
 
-  select coalesce(sum(paid_paise), 0) into v_paid from expense_payers where expense_id = v_id;
-  select coalesce(sum(owed_paise), 0) into v_owed from expense_splits where expense_id = v_id;
+  select coalesce(sum(paid_minor), 0) into v_paid from expense_payers where expense_id = v_id;
+  select coalesce(sum(owed_minor), 0) into v_owed from expense_splits where expense_id = v_id;
 
   if v_paid <> v_total then
-    raise exception 'expense %: payers sum to % paise, total is %', v_id, v_paid, v_total
+    raise exception 'expense %: payers sum to % minor units, total is %', v_id, v_paid, v_total
       using errcode = 'check_violation';
   end if;
   if v_owed <> v_total then
-    raise exception 'expense %: splits sum to % paise, total is %', v_id, v_owed, v_total
+    raise exception 'expense %: splits sum to % minor units, total is %', v_id, v_owed, v_total
       using errcode = 'check_violation';
   end if;
   return null;
 end $$;
 
 create constraint trigger expenses_balanced_ct
-  after insert or update of total_paise, deleted_at on expenses
+  after insert or update of total_minor, deleted_at on expenses
   deferrable initially deferred
   for each row execute function check_expense_balanced();
 
@@ -552,57 +614,62 @@ create constraint trigger expense_splits_balanced_ct
   deferrable initially deferred
   for each row execute function check_expense_balanced();
 
--- 3.20 Views: balances (FR-31, FR-32)
--- net_paise > 0: member should receive money; < 0: member owes money.
+-- Views: balances, per currency. Amounts in different currencies are never added together.
+-- net_minor > 0: member should receive money; < 0: member owes money.
 -- Only confirmed settlements move balances; pending ones are shown separately.
+-- Every member gets at least a zero row in their group's default currency.
 create or replace view member_balances as
-with paid as (
-  select p.group_id, p.member_id, sum(p.paid_paise) as amt
+with ledger as (
+  select p.group_id, p.member_id, e.currency,
+         p.paid_minor as paid, 0::bigint as owed, 0::bigint as sent, 0::bigint as received,
+         0::bigint as pending_sent, 0::bigint as pending_received
   from expense_payers p
   join expenses e on e.id = p.expense_id
   where e.deleted_at is null
-  group by p.group_id, p.member_id
-), owed as (
-  select s.group_id, s.member_id, sum(s.owed_paise) as amt
+  union all
+  select s.group_id, s.member_id, e.currency, 0, s.owed_minor, 0, 0, 0, 0
   from expense_splits s
   join expenses e on e.id = s.expense_id
   where e.deleted_at is null
-  group by s.group_id, s.member_id
-), sent as (
-  select group_id, from_member_id as member_id,
-         sum(amount_paise) filter (where status = 'confirmed') as confirmed_amt,
-         sum(amount_paise) filter (where status = 'pending')   as pending_amt
+  union all
+  select group_id, from_member_id, currency,
+         0, 0,
+         case when status = 'confirmed' then amount_minor else 0 end, 0,
+         case when status = 'pending'   then amount_minor else 0 end, 0
   from settlements
-  group by group_id, from_member_id
-), received as (
-  select group_id, to_member_id as member_id,
-         sum(amount_paise) filter (where status = 'confirmed') as confirmed_amt,
-         sum(amount_paise) filter (where status = 'pending')   as pending_amt
+  where status in ('confirmed', 'pending')
+  union all
+  select group_id, to_member_id, currency,
+         0, 0,
+         0, case when status = 'confirmed' then amount_minor else 0 end,
+         0, case when status = 'pending'   then amount_minor else 0 end
   from settlements
-  group by group_id, to_member_id
+  where status in ('confirmed', 'pending')
+  union all
+  select gm.group_id, gm.id, g.default_currency, 0, 0, 0, 0, 0, 0
+  from group_members gm
+  join groups g on g.id = gm.group_id
 )
 select
-  gm.group_id,
-  gm.id      as member_id,
+  l.group_id,
+  l.member_id,
   gm.user_id,
-  coalesce(paid.amt, 0)                    as paid_paise,
-  coalesce(owed.amt, 0)                    as owed_paise,
-  coalesce(paid.amt, 0) - coalesce(owed.amt, 0)
-    + coalesce(sent.confirmed_amt, 0) - coalesce(received.confirmed_amt, 0) as net_paise,
-  coalesce(sent.pending_amt, 0)            as pending_sent_paise,
-  coalesce(received.pending_amt, 0)        as pending_received_paise
-from group_members gm
-left join paid     on paid.group_id     = gm.group_id and paid.member_id     = gm.id
-left join owed     on owed.group_id     = gm.group_id and owed.member_id     = gm.id
-left join sent     on sent.group_id     = gm.group_id and sent.member_id     = gm.id
-left join received on received.group_id = gm.group_id and received.member_id = gm.id;
+  l.currency,
+  sum(l.paid)::bigint                                                  as paid_minor,
+  sum(l.owed)::bigint                                                  as owed_minor,
+  (sum(l.paid) - sum(l.owed) + sum(l.sent) - sum(l.received))::bigint as net_minor,
+  sum(l.pending_sent)::bigint                                          as pending_sent_minor,
+  sum(l.pending_received)::bigint                                      as pending_received_minor
+from ledger l
+join group_members gm on gm.id = l.member_id
+group by l.group_id, l.member_id, gm.user_id, l.currency;
 
 create or replace view user_balances as
-select mb.user_id, g.currency, sum(mb.net_paise) as net_paise
+select mb.user_id, mb.currency, sum(mb.net_minor)::bigint as net_minor
 from member_balances mb
 join groups g on g.id = mb.group_id
 where mb.user_id is not null and g.archived_at is null
-group by mb.user_id, g.currency;
+group by mb.user_id, mb.currency;
 `;
 
 const DOWN_SQL = String.raw`
@@ -627,6 +694,8 @@ drop table if exists group_members;
 drop table if exists groups;
 drop table if exists user_upi_ids;
 drop table if exists users;
+drop table if exists exchange_rates;
+drop table if exists currencies;
 
 drop function if exists check_expense_balanced();
 drop function if exists guard_member_hard_delete();
