@@ -143,7 +143,13 @@ describe('placeholder members', () => {
     expect((await f.as('bala').get(`/invites/${inv.token}`)).body.placeholderName).toBe('Dev');
 
     const claimed = await f.as('bala').post(`/invites/${inv.token}/accept`).expect(200);
-    expect(claimed.body).toEqual({ groupId: g, memberId: dev.id, outcome: 'claimed' });
+    expect(claimed.body).toEqual({
+      kind: 'group',
+      groupId: g,
+      memberId: dev.id,
+      friendUserId: null,
+      outcome: 'claimed',
+    });
     const [row] = await f.sql('select user_id, claimed_at from group_members where id = $1', [
       dev.id,
     ]);
@@ -202,7 +208,13 @@ describe('removing and leaving', () => {
     await f.as('owner').del(`/groups/${g}/members/${m}`).expect(204);
     const { token } = await invite(g);
     const res = await f.as('bala').post(`/invites/${token}/accept`).expect(200);
-    expect(res.body).toEqual({ groupId: g, memberId: m, outcome: 'rejoined' });
+    expect(res.body).toEqual({
+      kind: 'group',
+      groupId: g,
+      memberId: m,
+      friendUserId: null,
+      outcome: 'rejoined',
+    });
     expect((await f.as('bala').get(`/groups/${g}`)).body.me.leftAt).toBeNull();
   });
 

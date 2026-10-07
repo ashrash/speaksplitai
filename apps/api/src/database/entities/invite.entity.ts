@@ -6,8 +6,12 @@ export class Invite {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column('uuid')
-  groupId: string;
+  /** 'group': join groupId. 'friend': become friends with the creator (no group). */
+  @Column('text')
+  kind: 'group' | 'friend';
+
+  @Column('uuid', { nullable: true })
+  groupId: string | null;
 
   @Column('bytea')
   tokenHash: Buffer;

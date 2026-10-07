@@ -208,27 +208,88 @@ export type InviteResponse = z.infer<typeof inviteResponseSchema>;
 
 /** What someone sees before accepting an invite. */
 export const invitePreviewSchema = z.object({
-  group: z.object({
-    id: uuidSchema,
-    name: z.string(),
-    type: z.string(),
-    memberCount: z.number().int(),
-  }),
+  /** 'group': join the group below. 'friend': become friends with the person who sent it. */
+  kind: z.enum(['group', 'friend']),
+  group: z
+    .object({ id: uuidSchema, name: z.string(), type: z.string(), memberCount: z.number().int() })
+    .nullable(),
   invitedBy: z.string(),
   placeholderName: z.string().nullable(),
   expiresAt: z.string(),
+  /** Already in the group (group invites) or already friends (friend invites). */
   alreadyMember: z.boolean(),
 });
 export type InvitePreview = z.infer<typeof invitePreviewSchema>;
 
 export const acceptInviteResponseSchema = z.object({
-  groupId: uuidSchema,
-  memberId: uuidSchema,
-  /** joined: new member; rejoined: was a former member; claimed: took over a placeholder; already: no change. */
-  outcome: z.enum(['joined', 'rejoined', 'claimed', 'already']),
+  kind: z.enum(['group', 'friend']),
+  /** Group invites. */
+  groupId: uuidSchema.nullable(),
+  memberId: uuidSchema.nullable(),
+  /** Friend invites: the person you are now friends with. */
+  friendUserId: uuidSchema.nullable(),
+  /**
+   * joined: new member; rejoined: was a former member; claimed: took over a placeholder;
+   * befriended: new friend; already: no change.
+   */
+  outcome: z.enum(['joined', 'rejoined', 'claimed', 'befriended', 'already']),
 });
 export type AcceptInviteResponse = z.infer<typeof acceptInviteResponseSchema>;
 
 export const addPlaceholderRequestSchema = z.object({
   name: z.string().trim().min(1).max(80),
 });
+
+export const createFriendInviteRequestSchema = z.object({
+  maxUses: z.number().int().min(1).max(100).optional(),
+  expiresInHours: z.number().int().min(1).max(720).default(168),
+});
+
+/** E.164 phone number, e.g. +919876543210. */
+export const phoneSchema = z
+  .string()
+  .regex(/^\+[1-9][0-9]{7,14}$/, 'a phone number with country code, like +919876543210');
+
+/** Exactly one of userId, email or phone. */
+export const friendRequestSchema = z.union([
+  z.object({ userId: uuidSchema }).strict(),
+  z.object({ email: z.email().transform((e) => e.trim().toLowerCase()) }).strict(),
+  z.object({ phone: phoneSchema }).strict(),
+]);
+export type FriendRequestInput = z.input<typeof friendRequestSchema>;
+
+/**
+ * For email and phone the answer is always 'sent', whether or not anyone uses that address, so
+ * the endpoint can't be used to find out who is registered.
+ */
+export const friendRequestResultSchema = z.object({
+  status: z.enum(['sent', 'accepted', 'already_friends']),
+});
+export type FriendRequestResult = z.infer<typeof friendRequestResultSchema>;
+
+export const friendRequestViewSchema = z.object({
+  id: uuidSchema,
+  /** Incoming: who asked. Outgoing: who you asked (a masked address if not matched yet). */
+  person: z.object({ userId: uuidSchema.nullable(), name: z.string() }),
+  createdAt: z.string(),
+});
+export type FriendRequestView = z.infer<typeof friendRequestViewSchema>;
+
+export const friendRequestsResponseSchema = z.object({
+  incoming: z.array(friendRequestViewSchema),
+  outgoing: z.array(friendRequestViewSchema),
+});
+export type FriendRequestsResponse = z.infer<typeof friendRequestsResponseSchema>;
+
+export const friendSchema = z.object({
+  userId: uuidSchema,
+  name: z.string(),
+  avatarUrl: z.string().nullable(),
+  /** An explicit friend (by invite link or accepted request). */
+  isFriend: z.boolean(),
+  /** You share, or shared, a group. */
+  sharesGroup: z.boolean(),
+  /** The friend-to-friend group, if it has been opened. */
+  directGroupId: uuidSchema.nullable(),
+});
+export type Friend = z.infer<typeof friendSchema>;

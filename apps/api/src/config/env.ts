@@ -10,6 +10,11 @@ const envSchema = z.object({
   AUTH0_ISSUER_URL: z.url(),
   /** The API identifier configured in Auth0; access tokens must carry it in `aud`. */
   AUTH0_AUDIENCE: z.string().min(1),
+  /**
+   * Prefix of custom claims an Auth0 Action adds to access tokens, e.g. https://speaksplit.app/
+   * (so the API reads https://speaksplit.app/email and .../email_verified). Plain claims also work.
+   */
+  AUTH0_CLAIM_NAMESPACE: z.string().optional(),
   /** Base URL invite links point at, e.g. https://pay.example.com (the app or web page). */
   PUBLIC_APP_URL: z.url().optional(),
 });

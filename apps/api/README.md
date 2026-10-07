@@ -25,6 +25,12 @@ The token's RS256 signature is checked against the tenant's JWKS, along with `is
 authenticated request, with a display name from the token; email and phone are only set through
 the profile, so an unverified email can't collide with another account.
 
+**Verified email.** Friend requests by email are matched against `users.email`, which the API
+keeps equal to the token's email when Auth0 marks it verified (and no other active account has
+it). Auth0 access tokens don't carry email by default: add a post-login Action that sets
+`email` and `email_verified` on the access token, under `AUTH0_CLAIM_NAMESPACE` (for example
+`https://speaksplit.app/email`). Phone numbers are never verified yet, so phone requests wait.
+
 **Group access.** Group routes use `@GroupAccess('read' | 'member' | 'write' | 'manage')` on the `:groupId` parameter:
 
 | Caller                    | read | write                                         | manage (archive, unarchive, delete)                                                   |
@@ -95,6 +101,16 @@ Authorization headers, cookies and idempotency keys are redacted.
 | POST   | `/groups/:groupId/members`           | group write      | `{ name }`: placeholder member                                                                                                          |
 | DELETE | `/groups/:groupId/members/:memberId` | group manage     | only when their balance is zero; not the owner; they keep read access                                                                   |
 | POST   | `/groups/:groupId/leave`             | group member     | only when your balance is zero; owners can't leave                                                                                      |
+| GET    | `/friends`                           | signed in        | friends, group-mates and friend-to-friend partners, with flags and the direct group id                                                  |
+| DELETE | `/friends/:userId`                   | signed in        | ends an explicit friendship only                                                                                                        |
+| POST   | `/friends/requests`                  | signed in        | `{ userId }`, `{ email }` or `{ phone }`; 202 `sent` (always, for email/phone), 200 `accepted` / `already_friends`; 20 a day            |
+| GET    | `/friends/requests`                  | signed in        | `{ incoming, outgoing }`; unmatched addresses are masked                                                                                |
+| POST   | `/friends/requests/:id/accept`       | recipient        |                                                                                                                                         |
+| POST   | `/friends/requests/:id/decline`      | recipient        | quiet: the sender just stops seeing it as pending                                                                                       |
+| DELETE | `/friends/requests/:id`              | sender           | cancel                                                                                                                                  |
+| POST   | `/friends/invites`                   | signed in        | personal "add me" link; token returned once; at most 10 active                                                                          |
+| GET    | `/friends/invites`                   | signed in        | your active friend links                                                                                                                |
+| DELETE | `/friends/invites/:inviteId`         | creator          | revoke                                                                                                                                  |
 | POST   | `/direct`                            | signed in        | `{ userId }`: the friend-to-friend group with someone you share a group with; created once per pair; 403 if either blocked the other    |
 | GET    | `/direct`                            | signed in        | your friend-to-friend groups                                                                                                            |
 

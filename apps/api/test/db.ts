@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { DataSource } from 'typeorm';
-import { InitialSchema1791331200000 } from '../src/database/migrations/1791331200000-InitialSchema.js';
+import { MIGRATIONS } from '../src/database/migrations/index.js';
 
 export interface TestDatabase {
   url: string;
@@ -23,7 +23,7 @@ export async function createMigratedDatabase(): Promise<TestDatabase> {
   const dataSource = new DataSource({
     type: 'postgres',
     url: url.toString(),
-    migrations: [InitialSchema1791331200000],
+    migrations: MIGRATIONS,
     migrationsTableName: 'typeorm_migrations',
   });
   await dataSource.initialize();
