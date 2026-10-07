@@ -241,7 +241,9 @@ pnpm test:int                           # database integration tests; needs TEST
         cancel), unfriend; verified email synced from Auth0
   - [x] Invite links (expiry, use limits, revoke); join, rejoin, placeholder members; remove and
         leave (blocked while they have a balance; owners can't leave until ownership transfer exists)
-  - [ ] Expenses: create, edit, delete, with audit history
+  - [x] Expenses: create (retry-safe), list (yours by default, all on request, paged), view,
+        edit (optimistic locking), delete and restore, with audit history; equal, exact,
+        percent, shares and adjustment splits; former members' amounts are frozen
   - [ ] Balances per group and overall, with simplified debts
   - [ ] Record a payment (UPI or cash, including paying a foreign-currency debt in INR); counts
         immediately; must clear the full amount owed

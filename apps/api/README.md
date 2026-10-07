@@ -67,6 +67,11 @@ and last 24 hours:
 If the process dies after the handler commits but before the key is marked complete, retries
 with that key get 409 until it expires; the client should then refresh rather than resend.
 
+**Expenses and former members.** Someone who leaves had a zero balance, so nothing may change
+what they paid or owe afterwards: editing such an expense can change its text, category and date
+but not their amounts, and it can't be deleted or restored (409 `former_member`). New expenses
+can only include current members (422 `former_member`).
+
 **Concurrent edits.** Updates take the `version` the client last saw; if someone changed the row
 first the API returns 409 `stale_version` and nothing is overwritten.
 
@@ -76,42 +81,48 @@ Authorization headers, cookies and idempotency keys are redacted.
 
 ## Endpoints so far
 
-| Method | Path                                 | Access           | Notes                                                                                                                                   |
-| ------ | ------------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/health`                            | public           | liveness                                                                                                                                |
-| GET    | `/health/ready`                      | public           | checks the database                                                                                                                     |
-| GET    | `/me`                                | signed in        | profile and UPI IDs; creates the user on first call                                                                                     |
-| PATCH  | `/me`                                | signed in        | name, avatar (https), language, default currency                                                                                        |
-| GET    | `/me/upi-ids`                        | signed in        | primary first                                                                                                                           |
-| POST   | `/me/upi-ids`                        | signed in        | first one is primary; duplicates (any case) 409; at most 10                                                                             |
-| PATCH  | `/me/upi-ids/:id`                    | own UPI IDs only | label; `isPrimary: true` moves primary                                                                                                  |
-| DELETE | `/me/upi-ids/:id`                    | own UPI IDs only | removing the primary promotes the oldest remaining                                                                                      |
-| POST   | `/groups`                            | signed in        | idempotent; caller becomes owner                                                                                                        |
-| GET    | `/groups`                            | signed in        | groups you currently belong to; `?status=archived` for archived ones                                                                    |
-| GET    | `/groups/:groupId`                   | group read       | group and members                                                                                                                       |
-| PATCH  | `/groups/:groupId`                   | group write      | rename, currency, simplify; needs `version`                                                                                             |
-| POST   | `/groups/:groupId/archive`           | group manage     | read-only and hidden from `GET /groups`                                                                                                 |
-| POST   | `/groups/:groupId/unarchive`         | group manage     |                                                                                                                                         |
-| DELETE | `/groups/:groupId`                   | group manage     | only when every balance is zero (409 `unsettled` lists currencies)                                                                      |
-| POST   | `/groups/:groupId/invites`           | group write      | `{ maxUses?, expiresInHours?, placeholderMemberId? }`; returns the token once (and `url` if `PUBLIC_APP_URL` is set); at most 20 active |
-| GET    | `/groups/:groupId/invites`           | group write      | active invites, without tokens                                                                                                          |
-| DELETE | `/groups/:groupId/invites/:inviteId` | group write      | revoke                                                                                                                                  |
-| GET    | `/invites/:token`                    | signed in        | preview: group, who invited, placeholder name; 404 unknown, 410 expired / revoked / used up                                             |
-| POST   | `/invites/:token/accept`             | signed in        | join, rejoin or claim a placeholder; repeat-safe; 403 if either blocked the other                                                       |
-| POST   | `/groups/:groupId/members`           | group write      | `{ name }`: placeholder member                                                                                                          |
-| DELETE | `/groups/:groupId/members/:memberId` | group manage     | only when their balance is zero; not the owner; they keep read access                                                                   |
-| POST   | `/groups/:groupId/leave`             | group member     | only when your balance is zero; owners can't leave                                                                                      |
-| GET    | `/friends`                           | signed in        | friends, group-mates and friend-to-friend partners, with flags and the direct group id                                                  |
-| DELETE | `/friends/:userId`                   | signed in        | ends an explicit friendship only                                                                                                        |
-| POST   | `/friends/requests`                  | signed in        | `{ userId }`, `{ email }` or `{ phone }`; 202 `sent` (always, for email/phone), 200 `accepted` / `already_friends`; 20 a day            |
-| GET    | `/friends/requests`                  | signed in        | `{ incoming, outgoing }`; unmatched addresses are masked                                                                                |
-| POST   | `/friends/requests/:id/accept`       | recipient        |                                                                                                                                         |
-| POST   | `/friends/requests/:id/decline`      | recipient        | quiet: the sender just stops seeing it as pending                                                                                       |
-| DELETE | `/friends/requests/:id`              | sender           | cancel                                                                                                                                  |
-| POST   | `/friends/invites`                   | signed in        | personal "add me" link; token returned once; at most 10 active                                                                          |
-| GET    | `/friends/invites`                   | signed in        | your active friend links                                                                                                                |
-| DELETE | `/friends/invites/:inviteId`         | creator          | revoke                                                                                                                                  |
-| POST   | `/direct`                            | signed in        | `{ userId }`: the friend-to-friend group with someone you share a group with; created once per pair; 403 if either blocked the other    |
-| GET    | `/direct`                            | signed in        | your friend-to-friend groups                                                                                                            |
+| Method | Path                                           | Access           | Notes                                                                                                                                       |
+| ------ | ---------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/health`                                      | public           | liveness                                                                                                                                    |
+| GET    | `/health/ready`                                | public           | checks the database                                                                                                                         |
+| GET    | `/me`                                          | signed in        | profile and UPI IDs; creates the user on first call                                                                                         |
+| PATCH  | `/me`                                          | signed in        | name, avatar (https), language, default currency                                                                                            |
+| GET    | `/me/upi-ids`                                  | signed in        | primary first                                                                                                                               |
+| POST   | `/me/upi-ids`                                  | signed in        | first one is primary; duplicates (any case) 409; at most 10                                                                                 |
+| PATCH  | `/me/upi-ids/:id`                              | own UPI IDs only | label; `isPrimary: true` moves primary                                                                                                      |
+| DELETE | `/me/upi-ids/:id`                              | own UPI IDs only | removing the primary promotes the oldest remaining                                                                                          |
+| POST   | `/groups`                                      | signed in        | idempotent; caller becomes owner                                                                                                            |
+| GET    | `/groups`                                      | signed in        | groups you currently belong to; `?status=archived` for archived ones                                                                        |
+| GET    | `/groups/:groupId`                             | group read       | group and members                                                                                                                           |
+| PATCH  | `/groups/:groupId`                             | group write      | rename, currency, simplify; needs `version`                                                                                                 |
+| POST   | `/groups/:groupId/archive`                     | group manage     | read-only and hidden from `GET /groups`                                                                                                     |
+| POST   | `/groups/:groupId/unarchive`                   | group manage     |                                                                                                                                             |
+| DELETE | `/groups/:groupId`                             | group manage     | only when every balance is zero (409 `unsettled` lists currencies)                                                                          |
+| POST   | `/groups/:groupId/invites`                     | group write      | `{ maxUses?, expiresInHours?, placeholderMemberId? }`; returns the token once (and `url` if `PUBLIC_APP_URL` is set); at most 20 active     |
+| GET    | `/groups/:groupId/invites`                     | group write      | active invites, without tokens                                                                                                              |
+| DELETE | `/groups/:groupId/invites/:inviteId`           | group write      | revoke                                                                                                                                      |
+| GET    | `/invites/:token`                              | signed in        | preview: group, who invited, placeholder name; 404 unknown, 410 expired / revoked / used up                                                 |
+| POST   | `/invites/:token/accept`                       | signed in        | join, rejoin or claim a placeholder; repeat-safe; 403 if either blocked the other                                                           |
+| POST   | `/groups/:groupId/members`                     | group write      | `{ name }`: placeholder member                                                                                                              |
+| DELETE | `/groups/:groupId/members/:memberId`           | group manage     | only when their balance is zero; not the owner; they keep read access                                                                       |
+| POST   | `/groups/:groupId/leave`                       | group member     | only when your balance is zero; owners can't leave                                                                                          |
+| GET    | `/friends`                                     | signed in        | friends, group-mates and friend-to-friend partners, with flags and the direct group id                                                      |
+| DELETE | `/friends/:userId`                             | signed in        | ends an explicit friendship only                                                                                                            |
+| POST   | `/friends/requests`                            | signed in        | `{ userId }`, `{ email }` or `{ phone }`; 202 `sent` (always, for email/phone), 200 `accepted` / `already_friends`; 20 a day                |
+| GET    | `/friends/requests`                            | signed in        | `{ incoming, outgoing }`; unmatched addresses are masked                                                                                    |
+| POST   | `/friends/requests/:id/accept`                 | recipient        |                                                                                                                                             |
+| POST   | `/friends/requests/:id/decline`                | recipient        | quiet: the sender just stops seeing it as pending                                                                                           |
+| DELETE | `/friends/requests/:id`                        | sender           | cancel                                                                                                                                      |
+| POST   | `/friends/invites`                             | signed in        | personal "add me" link; token returned once; at most 10 active                                                                              |
+| GET    | `/friends/invites`                             | signed in        | your active friend links                                                                                                                    |
+| DELETE | `/friends/invites/:inviteId`                   | creator          | revoke                                                                                                                                      |
+| POST   | `/groups/:groupId/expenses`                    | group write      | idempotent; payers must add up to the total; split computed by the split engine in join order; 422 with a `code` for bad amounts or members |
+| GET    | `/groups/:groupId/expenses`                    | group read       | `?scope=mine` (default) or `all`, `limit`, `cursor`; newest first; includes your paid / owed / net                                          |
+| GET    | `/groups/:groupId/expenses/:expenseId`         | group read       | payers, splits (with percent or share inputs), version; deleted ones show `deletedAt`                                                       |
+| PATCH  | `/groups/:groupId/expenses/:expenseId`         | group write      | whole expense plus `version`; 409 `stale_version` or `deleted`                                                                              |
+| DELETE | `/groups/:groupId/expenses/:expenseId`         | group write      | soft delete, repeat-safe                                                                                                                    |
+| POST   | `/groups/:groupId/expenses/:expenseId/restore` | group write      | undo a delete                                                                                                                               |
+| POST   | `/direct`                                      | signed in        | `{ userId }`: the friend-to-friend group with someone you share a group with; created once per pair; 403 if either blocked the other        |
+| GET    | `/direct`                                      | signed in        | your friend-to-friend groups                                                                                                                |
 
 Request and response shapes are the zod schemas in `@speaksplit/api-types`.
