@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import type { DataSourceOptions } from 'typeorm';
 
 /**
- * Migrations are the source of truth for the schema (docs/schema.md, section 7):
+ * Hand-written migrations are the source of truth for the schema;
  * never let TypeORM synchronize.
  */
 export function typeormOptions(databaseUrl: string): DataSourceOptions {

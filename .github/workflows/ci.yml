@@ -8,6 +8,20 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: speaksplit
+          POSTGRES_PASSWORD: speaksplit
+          POSTGRES_DB: speaksplit
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U speaksplit"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -21,3 +35,7 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
+      - name: Database integration tests
+        run: pnpm test:int
+        env:
+          TEST_DATABASE_URL: postgres://speaksplit:speaksplit@localhost:5432/speaksplit

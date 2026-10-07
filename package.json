@@ -8,6 +8,8 @@
   "scripts": {
     "build": "pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" build",
     "test": "pnpm -r test",
+    "test:int": "pnpm --filter @speaksplit/api test:int",
+    "db:migrate": "pnpm --filter @speaksplit/api build && pnpm --filter @speaksplit/api migration:run",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
