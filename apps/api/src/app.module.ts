@@ -11,6 +11,9 @@ import { type Env, validateEnv } from './config/env.js';
 import { typeormOptions } from './database/typeorm-options.js';
 import { DirectController, GroupsController } from './groups/groups.controller.js';
 import { GroupsService } from './groups/groups.service.js';
+import { GroupMembersController, InviteLinksController } from './groups/invites.controller.js';
+import { InvitesService } from './groups/invites.service.js';
+import { MembersService } from './groups/members.service.js';
 import { HealthController } from './health/health.controller.js';
 import { MeController } from './users/me.controller.js';
 import { ProfileService } from './users/profile.service.js';
@@ -48,11 +51,20 @@ import { UsersService } from './users/users.service.js';
         typeormOptions(config.get('DATABASE_URL', { infer: true })),
     }),
   ],
-  controllers: [HealthController, MeController, GroupsController, DirectController],
+  controllers: [
+    HealthController,
+    MeController,
+    GroupsController,
+    DirectController,
+    GroupMembersController,
+    InviteLinksController,
+  ],
   providers: [
     UsersService,
     ProfileService,
     GroupsService,
+    InvitesService,
+    MembersService,
     {
       provide: JWKS,
       inject: [ConfigService],

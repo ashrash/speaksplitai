@@ -25,7 +25,7 @@ The token's RS256 signature is checked against the tenant's JWKS, along with `is
 authenticated request, with a display name from the token; email and phone are only set through
 the profile, so an unverified email can't collide with another account.
 
-**Group access.** Group routes use `@GroupAccess('read' | 'write' | 'manage')` on the `:groupId` parameter:
+**Group access.** Group routes use `@GroupAccess('read' | 'member' | 'write' | 'manage')` on the `:groupId` parameter:
 
 | Caller                    | read | write                                         | manage (archive, unarchive, delete)                                                   |
 | ------------------------- | ---- | --------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -33,6 +33,7 @@ the profile, so an unverified email can't collide with another account.
 | Former member (`left_at`) | yes  | 403                                           | 403                                                                                   |
 | Anyone else               | 404  | 404                                           | 404                                                                                   |
 
+A fourth level, `member`, is any current member even in an archived group (used for leaving).
 Non-members get 404 rather than 403, so group ids can't be probed. Every member can read every
 expense in a group; lists default to the ones the caller paid for or is part of.
 
@@ -69,24 +70,32 @@ Authorization headers, cookies and idempotency keys are redacted.
 
 ## Endpoints so far
 
-| Method | Path                         | Access           | Notes                                                                                                                                |
-| ------ | ---------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| GET    | `/health`                    | public           | liveness                                                                                                                             |
-| GET    | `/health/ready`              | public           | checks the database                                                                                                                  |
-| GET    | `/me`                        | signed in        | profile and UPI IDs; creates the user on first call                                                                                  |
-| PATCH  | `/me`                        | signed in        | name, avatar (https), language, default currency                                                                                     |
-| GET    | `/me/upi-ids`                | signed in        | primary first                                                                                                                        |
-| POST   | `/me/upi-ids`                | signed in        | first one is primary; duplicates (any case) 409; at most 10                                                                          |
-| PATCH  | `/me/upi-ids/:id`            | own UPI IDs only | label; `isPrimary: true` moves primary                                                                                               |
-| DELETE | `/me/upi-ids/:id`            | own UPI IDs only | removing the primary promotes the oldest remaining                                                                                   |
-| POST   | `/groups`                    | signed in        | idempotent; caller becomes owner                                                                                                     |
-| GET    | `/groups`                    | signed in        | groups you currently belong to; `?status=archived` for archived ones                                                                 |
-| GET    | `/groups/:groupId`           | group read       | group and members                                                                                                                    |
-| PATCH  | `/groups/:groupId`           | group write      | rename, currency, simplify; needs `version`                                                                                          |
-| POST   | `/groups/:groupId/archive`   | group manage     | read-only and hidden from `GET /groups`                                                                                              |
-| POST   | `/groups/:groupId/unarchive` | group manage     |                                                                                                                                      |
-| DELETE | `/groups/:groupId`           | group manage     | only when every balance is zero (409 `unsettled` lists currencies)                                                                   |
-| POST   | `/direct`                    | signed in        | `{ userId }`: the friend-to-friend group with someone you share a group with; created once per pair; 403 if either blocked the other |
-| GET    | `/direct`                    | signed in        | your friend-to-friend groups                                                                                                         |
+| Method | Path                                 | Access           | Notes                                                                                                                                   |
+| ------ | ------------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/health`                            | public           | liveness                                                                                                                                |
+| GET    | `/health/ready`                      | public           | checks the database                                                                                                                     |
+| GET    | `/me`                                | signed in        | profile and UPI IDs; creates the user on first call                                                                                     |
+| PATCH  | `/me`                                | signed in        | name, avatar (https), language, default currency                                                                                        |
+| GET    | `/me/upi-ids`                        | signed in        | primary first                                                                                                                           |
+| POST   | `/me/upi-ids`                        | signed in        | first one is primary; duplicates (any case) 409; at most 10                                                                             |
+| PATCH  | `/me/upi-ids/:id`                    | own UPI IDs only | label; `isPrimary: true` moves primary                                                                                                  |
+| DELETE | `/me/upi-ids/:id`                    | own UPI IDs only | removing the primary promotes the oldest remaining                                                                                      |
+| POST   | `/groups`                            | signed in        | idempotent; caller becomes owner                                                                                                        |
+| GET    | `/groups`                            | signed in        | groups you currently belong to; `?status=archived` for archived ones                                                                    |
+| GET    | `/groups/:groupId`                   | group read       | group and members                                                                                                                       |
+| PATCH  | `/groups/:groupId`                   | group write      | rename, currency, simplify; needs `version`                                                                                             |
+| POST   | `/groups/:groupId/archive`           | group manage     | read-only and hidden from `GET /groups`                                                                                                 |
+| POST   | `/groups/:groupId/unarchive`         | group manage     |                                                                                                                                         |
+| DELETE | `/groups/:groupId`                   | group manage     | only when every balance is zero (409 `unsettled` lists currencies)                                                                      |
+| POST   | `/groups/:groupId/invites`           | group write      | `{ maxUses?, expiresInHours?, placeholderMemberId? }`; returns the token once (and `url` if `PUBLIC_APP_URL` is set); at most 20 active |
+| GET    | `/groups/:groupId/invites`           | group write      | active invites, without tokens                                                                                                          |
+| DELETE | `/groups/:groupId/invites/:inviteId` | group write      | revoke                                                                                                                                  |
+| GET    | `/invites/:token`                    | signed in        | preview: group, who invited, placeholder name; 404 unknown, 410 expired / revoked / used up                                             |
+| POST   | `/invites/:token/accept`             | signed in        | join, rejoin or claim a placeholder; repeat-safe; 403 if either blocked the other                                                       |
+| POST   | `/groups/:groupId/members`           | group write      | `{ name }`: placeholder member                                                                                                          |
+| DELETE | `/groups/:groupId/members/:memberId` | group manage     | only when their balance is zero; not the owner; they keep read access                                                                   |
+| POST   | `/groups/:groupId/leave`             | group member     | only when your balance is zero; owners can't leave                                                                                      |
+| POST   | `/direct`                            | signed in        | `{ userId }`: the friend-to-friend group with someone you share a group with; created once per pair; 403 if either blocked the other    |
+| GET    | `/direct`                            | signed in        | your friend-to-friend groups                                                                                                            |
 
 Request and response shapes are the zod schemas in `@speaksplit/api-types`.

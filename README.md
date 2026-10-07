@@ -233,7 +233,8 @@ pnpm test:int                           # database integration tests; needs TEST
   - [x] Groups: create, list, view, rename (optimistic locking), default currency, archive,
         delete when settled
   - [x] Friend-to-friend groups (expenses in them come with the expense endpoints)
-  - [ ] Invite links; join; remove members (blocked while they have a balance)
+  - [x] Invite links (expiry, use limits, revoke); join, rejoin, placeholder members; remove and
+        leave (blocked while they have a balance; owners can't leave until ownership transfer exists)
   - [ ] Expenses: create, edit, delete, with audit history
   - [ ] Balances per group and overall, with simplified debts
   - [ ] Record a payment (UPI or cash, including paying a foreign-currency debt in INR); counts

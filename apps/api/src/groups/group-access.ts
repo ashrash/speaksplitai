@@ -15,7 +15,7 @@ import { DataSource } from 'typeorm';
 import type { AppRequest } from '../common/request.js';
 import { Group, GroupMember } from '../database/entities/index.js';
 
-export type GroupAccessLevel = 'read' | 'write' | 'manage';
+export type GroupAccessLevel = 'read' | 'member' | 'write' | 'manage';
 const GROUP_ACCESS = 'groupAccess';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -23,6 +23,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * The one place group-scoped routes are authorised, using the `:groupId` route parameter.
  *
  * - read: any member, including former members (they keep read-only access to history).
+ * - member: current members, including in archived groups (leaving).
  * - write: current members only, and not in an archived group.
  * - manage (archive, unarchive, delete): current members who own the group (either member of a
  *   friend-to-friend group); allowed on archived groups.

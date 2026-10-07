@@ -1,106 +1,31 @@
 import { randomUUID } from 'node:crypto';
-import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from './app.js';
+import { fixtures } from './fixtures.js';
 
 let t: TestApp;
-let http: ReturnType<TestApp['app']['getHttpServer']>;
-const tokens: Record<string, string> = {};
-const ids: Record<string, string> = {};
+let f: ReturnType<typeof fixtures>;
+let ids: Record<string, string>;
 
 beforeAll(async () => {
   t = await createTestApp();
-  http = t.app.getHttpServer();
-  for (const name of ['owner', 'member', 'friend', 'stranger', 'blocker']) {
-    tokens[name] = await t.token(`auth0|${name}`, { name });
-    ids[name] = (await as(name).get('/me').expect(200)).body.id;
-  }
+  f = fixtures(t);
+  ids = f.ids;
+  for (const name of ['owner', 'member', 'friend', 'stranger', 'blocker']) await f.user(name);
 });
 
 afterAll(async () => {
   await t?.close();
 });
 
-function as(name: string) {
-  const auth = () => `Bearer ${tokens[name]}`;
-  return {
-    get: (path: string) => request(http).get(path).set('Authorization', auth()),
-    post: (path: string, body: object = {}) =>
-      request(http)
-        .post(path)
-        .set('Authorization', auth())
-        .set('Idempotency-Key', randomUUID())
-        .send(body),
-    patch: (path: string, body: object) =>
-      request(http).patch(path).set('Authorization', auth()).send(body),
-    del: (path: string) => request(http).delete(path).set('Authorization', auth()),
-  };
-}
-
-const sql = (text: string, params: unknown[] = []) => t.db.dataSource.query(text, params);
-
-async function newGroup(name = 'Trip'): Promise<string> {
-  return (await as('owner').post('/groups', { name }).expect(201)).body.id;
-}
-
-async function addMember(groupId: string, who: string): Promise<string> {
-  const [row] = await sql(
-    `insert into group_members (group_id, user_id, role) values ($1, $2, 'member') returning id`,
-    [groupId, ids[who]],
-  );
-  return row.id;
-}
-
-async function memberId(groupId: string, who: string): Promise<string> {
-  const [row] = await sql('select id from group_members where group_id = $1 and user_id = $2', [
-    groupId,
-    ids[who],
-  ]);
-  return row.id;
-}
-
-/** `payer` paid `amount` for `owes`, all in one currency: owes ends up owing payer `amount`. */
-async function expense(
-  groupId: string,
-  payer: string,
-  owes: string,
-  amount: number,
-  currency = 'INR',
-) {
-  const runner = t.db.dataSource.createQueryRunner();
-  await runner.startTransaction();
-  const [e] = await runner.query(
-    `insert into expenses (group_id, description, total_minor, currency, split_type, created_by)
-     values ($1, 'Dinner', $2, $3, 'exact', $4) returning id`,
-    [groupId, amount, currency, ids[payer]],
-  );
-  await runner.query(
-    'insert into expense_payers (expense_id, group_id, member_id, paid_minor) values ($1, $2, $3, $4)',
-    [e.id, groupId, await memberId(groupId, payer), amount],
-  );
-  await runner.query(
-    'insert into expense_splits (expense_id, group_id, member_id, owed_minor) values ($1, $2, $3, $4)',
-    [e.id, groupId, await memberId(groupId, owes), amount],
-  );
-  await runner.commitTransaction();
-  await runner.release();
-}
-
-async function settle(groupId: string, from: string, to: string, amount: number, currency = 'INR') {
-  await sql(
-    `insert into settlements (group_id, from_member_id, to_member_id, amount_minor, currency, method,
-                              status, created_by, confirmed_by, confirmed_at)
-     values ($1, $2, $3, $4, $5, 'cash', 'confirmed', $6, $6, now())`,
-    [
-      groupId,
-      await memberId(groupId, from),
-      await memberId(groupId, to),
-      amount,
-      currency,
-      ids[from],
-    ],
-  );
-}
+const as = (name: string) => f.as(name);
+const sql = (text: string, params: unknown[] = []) => f.sql(text, params);
+const newGroup = (name = 'Trip') => f.newGroup('owner', name);
+const addMember = (groupId: string, who: string) => f.addMember(groupId, who);
+const expense = (groupId: string, payer: string, owes: string, amount: number, currency = 'INR') =>
+  f.expense(groupId, payer, owes, amount, currency);
+const settle = (groupId: string, from: string, to: string, amount: number, currency = 'INR') =>
+  f.settle(groupId, from, to, amount, currency);
 
 describe('archiving', () => {
   it('lets the owner archive: the group becomes read-only and leaves the main list', async () => {
@@ -215,9 +140,7 @@ describe('friend-to-friend groups', () => {
 
   it('creates exactly one group when both open it at the same moment', async () => {
     const [{ id: sharedId }] = await sql(`select id from groups where name = 'Shared'`);
-    const racer = await t.token('auth0|racer', { name: 'racer' });
-    tokens.racer = racer;
-    ids.racer = (await as('racer').get('/me')).body.id;
+    await f.user('racer');
     await addMember(sharedId, 'racer');
     const results = await Promise.all(
       Array.from({ length: 6 }, (_, i) =>

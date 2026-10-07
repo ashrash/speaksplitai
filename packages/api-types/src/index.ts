@@ -178,3 +178,57 @@ export const directGroupResponseSchema = z.object({
   archivedAt: z.string().nullable(),
 });
 export type DirectGroupResponse = z.infer<typeof directGroupResponseSchema>;
+
+/** Raw invite tokens are 32 random bytes, base64url. */
+export const inviteTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+
+export const createInviteRequestSchema = z.object({
+  /** Omit for unlimited uses until expiry. Placeholder invites are always single use. */
+  maxUses: z.number().int().min(1).max(100).optional(),
+  expiresInHours: z.number().int().min(1).max(720).default(168),
+  /** Invite a specific person to take over a placeholder member (and its history). */
+  placeholderMemberId: uuidSchema.optional(),
+});
+export type CreateInviteRequest = z.input<typeof createInviteRequestSchema>;
+
+export const inviteResponseSchema = z.object({
+  id: uuidSchema,
+  /** Only returned when the invite is created; it is not stored and can't be shown again. */
+  token: z.string().optional(),
+  /** `${PUBLIC_APP_URL}/join/${token}` when the server knows its public URL. */
+  url: z.string().nullable().optional(),
+  expiresAt: z.string(),
+  maxUses: z.number().int().nullable(),
+  useCount: z.number().int(),
+  placeholder: z.object({ memberId: uuidSchema, name: z.string() }).nullable(),
+  createdBy: z.object({ userId: uuidSchema, name: z.string() }),
+  createdAt: z.string(),
+});
+export type InviteResponse = z.infer<typeof inviteResponseSchema>;
+
+/** What someone sees before accepting an invite. */
+export const invitePreviewSchema = z.object({
+  group: z.object({
+    id: uuidSchema,
+    name: z.string(),
+    type: z.string(),
+    memberCount: z.number().int(),
+  }),
+  invitedBy: z.string(),
+  placeholderName: z.string().nullable(),
+  expiresAt: z.string(),
+  alreadyMember: z.boolean(),
+});
+export type InvitePreview = z.infer<typeof invitePreviewSchema>;
+
+export const acceptInviteResponseSchema = z.object({
+  groupId: uuidSchema,
+  memberId: uuidSchema,
+  /** joined: new member; rejoined: was a former member; claimed: took over a placeholder; already: no change. */
+  outcome: z.enum(['joined', 'rejoined', 'claimed', 'already']),
+});
+export type AcceptInviteResponse = z.infer<typeof acceptInviteResponseSchema>;
+
+export const addPlaceholderRequestSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+});
