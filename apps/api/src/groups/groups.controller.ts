@@ -1,7 +1,22 @@
-import { Body, ConflictException, Controller, Get, Param, Patch, Post, Req } from '@nestjs/common';
+import {
+  Body,
+  ConflictException,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+} from '@nestjs/common';
 import {
   createGroupRequestSchema,
+  type DirectGroupResponse,
   type GroupDetailResponse,
+  listGroupsQuerySchema,
+  openDirectRequestSchema,
   type GroupResponse,
   updateGroupRequestSchema,
 } from '@speaksplit/api-types';
@@ -29,8 +44,11 @@ export class GroupsController {
   }
 
   @Get()
-  list(@CurrentUser() user: User): Promise<GroupResponse[]> {
-    return this.groups.listMine(user);
+  list(
+    @CurrentUser() user: User,
+    @Query(new ZodPipe(listGroupsQuerySchema)) query: z.output<typeof listGroupsQuerySchema>,
+  ): Promise<GroupResponse[]> {
+    return this.groups.listMine(user, query.status);
   }
 
   @Get(':groupId')
@@ -58,5 +76,61 @@ export class GroupsController {
       }
       throw err;
     }
+  }
+
+  @Post(':groupId/archive')
+  @HttpCode(200)
+  @GroupAccess('manage')
+  archive(
+    @Param('groupId') groupId: string,
+    @CurrentUser() user: User,
+    @Req() req: AppRequest,
+  ): Promise<GroupResponse> {
+    return this.groups.setArchived(groupId, membershipOf(req), user, true, req.id);
+  }
+
+  @Post(':groupId/unarchive')
+  @HttpCode(200)
+  @GroupAccess('manage')
+  unarchive(
+    @Param('groupId') groupId: string,
+    @CurrentUser() user: User,
+    @Req() req: AppRequest,
+  ): Promise<GroupResponse> {
+    return this.groups.setArchived(groupId, membershipOf(req), user, false, req.id);
+  }
+
+  /** Only when everyone is settled up; removes the group and everything in it. */
+  @Delete(':groupId')
+  @HttpCode(204)
+  @GroupAccess('manage')
+  async remove(
+    @Param('groupId') groupId: string,
+    @CurrentUser() user: User,
+    @Req() req: AppRequest,
+  ): Promise<void> {
+    await this.groups.remove(groupId, user, req.id);
+  }
+}
+
+/** Friend-to-friend expenses live in a hidden two-person group per pair. */
+@Controller('direct')
+export class DirectController {
+  constructor(private readonly groups: GroupsService) {}
+
+  /** Returns the group with this person, creating it the first time (safe to repeat). */
+  @Post()
+  @HttpCode(200)
+  open(
+    @CurrentUser() user: User,
+    @Body(new ZodPipe(openDirectRequestSchema)) body: z.output<typeof openDirectRequestSchema>,
+    @Req() req: AppRequest,
+  ): Promise<DirectGroupResponse> {
+    return this.groups.openDirect(user, body.userId, req.id);
+  }
+
+  @Get()
+  list(@CurrentUser() user: User): Promise<DirectGroupResponse[]> {
+    return this.groups.listDirect(user);
   }
 }

@@ -15,7 +15,7 @@ import { DataSource } from 'typeorm';
 import type { AppRequest } from '../common/request.js';
 import { Group, GroupMember } from '../database/entities/index.js';
 
-export type GroupAccessLevel = 'read' | 'write';
+export type GroupAccessLevel = 'read' | 'write' | 'manage';
 const GROUP_ACCESS = 'groupAccess';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -24,6 +24,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  *
  * - read: any member, including former members (they keep read-only access to history).
  * - write: current members only, and not in an archived group.
+ * - manage (archive, unarchive, delete): current members who own the group (either member of a
+ *   friend-to-friend group); allowed on archived groups.
  *
  * Non-members get 404, so group ids can't be probed.
  */
@@ -54,13 +56,16 @@ export class GroupAccessGuard implements CanActivate {
     if (!membership) {
       throw new NotFoundException('Group not found');
     }
-    if (level === 'write') {
+    if (level !== 'read') {
       if (membership.leftAt) {
         throw new ForbiddenException('You left this group; its history is read-only for you');
       }
       const group = await this.db.getRepository(Group).findOneByOrFail({ id: groupId });
-      if (group.archivedAt) {
+      if (level === 'write' && group.archivedAt) {
         throw new ConflictException({ code: 'archived', message: 'This group is archived' });
+      }
+      if (level === 'manage' && group.type !== 'direct' && membership.role !== 'owner') {
+        throw new ForbiddenException('Only the group owner can do this');
       }
     }
     req.membership = membership;
