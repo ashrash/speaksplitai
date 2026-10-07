@@ -229,7 +229,7 @@ pnpm test:int                           # database integration tests; needs TEST
   - [x] TypeORM entities mirroring the migration; shared request/response schemas
   - [x] Test that one user can't read or change another group's data
 - [ ] API features
-  - [ ] Profile and UPI IDs
+  - [x] Profile and UPI IDs (email and phone changes wait for a verified flow)
   - [ ] Groups: ~~create, list, view, rename (with optimistic locking), default currency~~; archive, delete
   - [ ] Friend-to-friend expenses
   - [ ] Invite links; join; remove members (blocked while they have a balance)

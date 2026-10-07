@@ -40,6 +40,23 @@ export const errorResponseSchema = z.object({
 });
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;
 
+/** A UPI ID (VPA) such as name@okaxis. Same rule as the user_upi_ids_vpa_ck constraint. */
+export const vpaSchema = z
+  .string()
+  .trim()
+  .regex(
+    /^[A-Za-z0-9._-]{2,64}@[A-Za-z][A-Za-z0-9.-]{1,63}$/,
+    'not a valid UPI ID (like name@okaxis)',
+  );
+
+export const upiIdSchema = z.object({
+  id: uuidSchema,
+  vpa: z.string(),
+  label: z.string().nullable(),
+  isPrimary: z.boolean(),
+});
+export type UpiId = z.infer<typeof upiIdSchema>;
+
 export const meResponseSchema = z.object({
   id: uuidSchema,
   name: z.string(),
@@ -48,8 +65,46 @@ export const meResponseSchema = z.object({
   avatarUrl: z.string().nullable(),
   locale: z.string(),
   defaultCurrency: currencySchema,
+  /** Primary first, then oldest first. */
+  upiIds: z.array(upiIdSchema),
 });
 export type MeResponse = z.infer<typeof meResponseSchema>;
+
+/** Profile edits. Email and phone change through a verified flow, not here. */
+export const updateMeRequestSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).optional(),
+    avatarUrl: z
+      .url({ protocol: /^https$/ })
+      .nullable()
+      .optional(),
+    locale: z
+      .string()
+      .regex(/^[a-z]{2}(-[A-Z]{2})?$/, 'a language tag like en-IN or hi')
+      .optional(),
+    defaultCurrency: currencySchema.optional(),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined), { message: 'nothing to update' });
+export type UpdateMeRequest = z.input<typeof updateMeRequestSchema>;
+
+export const addUpiIdRequestSchema = z.object({
+  vpa: vpaSchema,
+  label: z.string().trim().min(1).max(40).optional(),
+  /** The first UPI ID is always primary; later ones only if asked. */
+  isPrimary: z.boolean().optional(),
+});
+export type AddUpiIdRequest = z.input<typeof addUpiIdRequestSchema>;
+
+export const updateUpiIdRequestSchema = z
+  .object({
+    label: z.string().trim().min(1).max(40).nullable().optional(),
+    /** Only `true` is meaningful: make this the primary. To change primary, set another one. */
+    isPrimary: z.literal(true).optional(),
+  })
+  .refine((v) => v.label !== undefined || v.isPrimary !== undefined, {
+    message: 'nothing to update',
+  });
+export type UpdateUpiIdRequest = z.input<typeof updateUpiIdRequestSchema>;
 
 /** Group types a user can create; 'direct' groups are made by the friend-to-friend flow. */
 export const groupTypeSchema = z.enum(['trip', 'flat', 'couple', 'friends', 'event', 'other']);
