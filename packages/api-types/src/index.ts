@@ -293,3 +293,146 @@ export const friendSchema = z.object({
   directGroupId: uuidSchema.nullable(),
 });
 export type Friend = z.infer<typeof friendSchema>;
+
+// ---- Expenses ----
+
+export const EXPENSE_CATEGORIES = [
+  'food',
+  'groceries',
+  'travel',
+  'transport',
+  'stay',
+  'rent',
+  'utilities',
+  'household',
+  'staff',
+  'entertainment',
+  'shopping',
+  'health',
+  'other',
+] as const;
+export const expenseCategorySchema = z.enum(EXPENSE_CATEGORIES);
+
+export const EXPENSE_SOURCES = ['manual', 'text', 'voice', 'image', 'image_text'] as const;
+
+/** Non-negative decimal with at most 4 places (fits numeric(12,4)), e.g. "33.3333" or "2". */
+export const shareDecimalSchema = z
+  .string()
+  .regex(/^\d{1,8}(\.\d{1,4})?$/, 'a number with at most 4 decimal places, as a string');
+
+const positiveMinor = minorUnitsSchema.refine((n) => n > 0, 'must be positive');
+const nonNegativeMinor = minorUnitsSchema.refine((n) => n >= 0, 'must not be negative');
+
+/**
+ * How to split. Member order doesn't matter: the server always splits in the order members
+ * joined the group, so leftover minor units go to the same people on every device.
+ */
+export const expenseSplitSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('equal'), memberIds: z.array(uuidSchema).min(1) }),
+  z.object({
+    type: z.literal('exact'),
+    amounts: z.array(z.object({ memberId: uuidSchema, amountMinor: nonNegativeMinor })).min(1),
+  }),
+  z.object({
+    type: z.literal('percent'),
+    percents: z.array(z.object({ memberId: uuidSchema, percent: shareDecimalSchema })).min(1),
+  }),
+  z.object({
+    type: z.literal('shares'),
+    shares: z.array(z.object({ memberId: uuidSchema, shares: shareDecimalSchema })).min(1),
+  }),
+  z.object({
+    type: z.literal('adjustment'),
+    adjustments: z
+      .array(z.object({ memberId: uuidSchema, adjustmentMinor: minorUnitsSchema }))
+      .min(1),
+  }),
+]);
+export type ExpenseSplitInput = z.infer<typeof expenseSplitSchema>;
+
+export const expenseRequestSchema = z.object({
+  description: z.string().trim().min(1).max(200),
+  category: expenseCategorySchema.nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  totalMinor: positiveMinor,
+  /** Defaults to the group's default currency. */
+  currency: currencySchema.optional(),
+  /** The day it was spent, as the user sees it (YYYY-MM-DD). */
+  expenseDate: z.iso.date(),
+  /** Who paid how much; must add up to the total. */
+  payers: z.array(z.object({ memberId: uuidSchema, paidMinor: positiveMinor })).min(1),
+  split: expenseSplitSchema,
+  source: z.enum(EXPENSE_SOURCES).default('manual'),
+});
+export type ExpenseRequest = z.input<typeof expenseRequestSchema>;
+
+/** Edits send the whole expense again, plus the version they started from. */
+export const updateExpenseRequestSchema = expenseRequestSchema.extend({
+  version: z.number().int().positive(),
+});
+export type UpdateExpenseRequest = z.input<typeof updateExpenseRequestSchema>;
+
+export const listExpensesQuerySchema = z.object({
+  /** mine (default): expenses you paid for or are part of. all: every expense in the group. */
+  scope: z.enum(['mine', 'all']).default('mine'),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+  cursor: z.string().max(200).optional(),
+});
+
+export const expenseMemberAmountSchema = z.object({
+  memberId: uuidSchema,
+  name: z.string(),
+});
+
+export const expenseDetailSchema = z.object({
+  id: uuidSchema,
+  groupId: uuidSchema,
+  description: z.string(),
+  category: expenseCategorySchema.nullable(),
+  notes: z.string().nullable(),
+  totalMinor: z.number().int(),
+  currency: currencySchema,
+  expenseDate: z.string(),
+  splitType: splitTypeSchema,
+  source: z.string(),
+  version: z.number().int(),
+  createdBy: z.object({ userId: uuidSchema, name: z.string() }),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  deletedAt: z.string().nullable(),
+  payers: z.array(expenseMemberAmountSchema.extend({ paidMinor: z.number().int() })),
+  splits: z.array(
+    expenseMemberAmountSchema.extend({
+      owedMinor: z.number().int(),
+      /** The percent or share units as entered. */
+      shareValue: z.string().nullable(),
+      adjustmentMinor: z.number().int().nullable(),
+    }),
+  ),
+});
+export type ExpenseDetail = z.infer<typeof expenseDetailSchema>;
+
+export const expenseListItemSchema = z.object({
+  id: uuidSchema,
+  description: z.string(),
+  category: expenseCategorySchema.nullable(),
+  totalMinor: z.number().int(),
+  currency: currencySchema,
+  expenseDate: z.string(),
+  splitType: splitTypeSchema,
+  createdAt: z.string(),
+  /** The caller's own part: what they paid, what they owe, and paid minus owed. */
+  mine: z.object({
+    paidMinor: z.number().int(),
+    owedMinor: z.number().int(),
+    netMinor: z.number().int(),
+  }),
+});
+export type ExpenseListItem = z.infer<typeof expenseListItemSchema>;
+
+export const expenseListResponseSchema = z.object({
+  items: z.array(expenseListItemSchema),
+  /** Pass as `cursor` for the next page; null on the last page. */
+  nextCursor: z.string().nullable(),
+});
+export type ExpenseListResponse = z.infer<typeof expenseListResponseSchema>;
