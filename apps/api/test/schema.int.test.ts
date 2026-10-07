@@ -448,7 +448,15 @@ describe('split engine agrees with the database', () => {
       status: r.status,
     }));
 
-    const { rows: view } = await client.query<Record<string, string>>(
+    const { rows: view } = await client.query<{
+      member_id: string;
+      currency: string;
+      paid_minor: string;
+      owed_minor: string;
+      net_minor: string;
+      pending_sent_minor: string;
+      pending_received_minor: string;
+    }>(
       `select member_id, currency, paid_minor, owed_minor, net_minor, pending_sent_minor, pending_received_minor
        from member_balances
        where group_id = $1 and (paid_minor <> 0 or owed_minor <> 0 or net_minor <> 0
