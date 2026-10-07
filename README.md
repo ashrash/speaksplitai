@@ -221,16 +221,16 @@ pnpm test:int                           # database integration tests; needs TEST
   - [x] Net balances from expenses and settlements, per currency
   - [x] Who owes whom, without simplification (for groups that turn it off)
   - [x] Debt simplification (fewest transfers), per currency
-- [ ] API foundation
-  - [ ] Auth0 token validation; create the user on first request
-  - [ ] Group membership check on every group-scoped endpoint
-  - [ ] Database errors mapped to HTTP errors; request IDs and structured logs
-  - [ ] Idempotency keys for creating expenses and recording payments
-  - [ ] TypeORM entities mirroring the migration; shared request/response schemas
-  - [ ] Test that one user can't read or change another group's data
+- [x] API foundation
+  - [x] Auth0 token validation; create the user on first request
+  - [x] Group membership check on every group-scoped endpoint (former members read-only)
+  - [x] Database errors mapped to HTTP errors; request IDs and structured logs
+  - [x] Idempotency keys for create endpoints (used by groups now; expenses and payments next)
+  - [x] TypeORM entities mirroring the migration; shared request/response schemas
+  - [x] Test that one user can't read or change another group's data
 - [ ] API features
   - [ ] Profile and UPI IDs
-  - [ ] Groups: create, rename, archive, delete; default currency
+  - [ ] Groups: ~~create, list, view, rename (with optimistic locking), default currency~~; archive, delete
   - [ ] Friend-to-friend expenses
   - [ ] Invite links; join; remove members (blocked while they have a balance)
   - [ ] Expenses: create, edit, delete, with audit history

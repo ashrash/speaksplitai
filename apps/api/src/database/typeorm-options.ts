@@ -1,5 +1,7 @@
-import { join } from 'node:path';
 import type { DataSourceOptions } from 'typeorm';
+import { ENTITIES } from './entities/index.js';
+import { MIGRATIONS } from './migrations/index.js';
+import { SnakeNamingStrategy } from './naming.js';
 
 /**
  * Hand-written migrations are the source of truth for the schema;
@@ -11,8 +13,9 @@ export function typeormOptions(databaseUrl: string): DataSourceOptions {
     url: databaseUrl,
     synchronize: false,
     migrationsRun: false,
-    entities: [join(import.meta.dirname, '..', '**', '*.entity.js')],
-    migrations: [join(import.meta.dirname, 'migrations', '*.js')],
+    entities: ENTITIES,
+    migrations: MIGRATIONS,
     migrationsTableName: 'typeorm_migrations',
+    namingStrategy: new SnakeNamingStrategy(),
   };
 }
