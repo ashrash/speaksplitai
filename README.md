@@ -244,9 +244,9 @@ pnpm test:int                           # database integration tests; needs TEST
   - [x] Expenses: create (retry-safe), list (yours by default, all on request, paged), view,
         edit (optimistic locking), delete and restore, with audit history; equal, exact,
         percent, shares and adjustment splits; former members' amounts are frozen
-  - [ ] Balances per group and overall, with simplified debts
-  - [ ] Record a payment (UPI or cash, including paying a foreign-currency debt in INR); counts
-        immediately; must clear the full amount owed
+  - [x] Balances per group (with the settle-up plan, simplified or direct) and overall
+  - [x] Record a payment (UPI or cash, including paying a foreign-currency debt in INR); counts
+        immediately; must clear the full amount owed; cancel; UPI pay links
 - [ ] Text-to-split: `POST /expenses/parse` with name anonymisation and split-engine validation
 - [ ] Auth0 tenant: mobile app, API audience, email OTP and Google sign-in
 - [ ] Mobile app: login, groups, add expense (form and text with review), expense detail,

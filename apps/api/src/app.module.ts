@@ -4,6 +4,9 @@ import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { LoggerModule } from 'nestjs-pino';
 import { AuthGuard } from './auth/auth.guard.js';
+import { GroupBalancesController, MyBalancesController } from './balances/balances.controller.js';
+import { BalancesService } from './balances/balances.service.js';
+import { SettlementsService } from './balances/settlements.service.js';
 import { JWKS, remoteJwks } from './auth/jwks.js';
 import { ErrorsFilter } from './common/errors.filter.js';
 import { requestId } from './common/request-id.js';
@@ -64,6 +67,8 @@ import { UsersService } from './users/users.service.js';
     InviteLinksController,
     FriendsController,
     ExpensesController,
+    GroupBalancesController,
+    MyBalancesController,
   ],
   providers: [
     UsersService,
@@ -73,6 +78,8 @@ import { UsersService } from './users/users.service.js';
     MembersService,
     FriendsService,
     ExpensesService,
+    BalancesService,
+    SettlementsService,
     {
       provide: JWKS,
       inject: [ConfigService],
