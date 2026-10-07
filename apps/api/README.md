@@ -69,14 +69,19 @@ Authorization headers, cookies and idempotency keys are redacted.
 
 ## Endpoints so far
 
-| Method | Path               | Access      | Notes                                       |
-| ------ | ------------------ | ----------- | ------------------------------------------- |
-| GET    | `/health`          | public      | liveness                                    |
-| GET    | `/health/ready`    | public      | checks the database                         |
-| GET    | `/me`              | signed in   | creates the user on first call              |
-| POST   | `/groups`          | signed in   | idempotent; caller becomes owner            |
-| GET    | `/groups`          | signed in   | groups you currently belong to              |
-| GET    | `/groups/:groupId` | group read  | group and members                           |
-| PATCH  | `/groups/:groupId` | group write | rename, currency, simplify; needs `version` |
+| Method | Path               | Access           | Notes                                                       |
+| ------ | ------------------ | ---------------- | ----------------------------------------------------------- |
+| GET    | `/health`          | public           | liveness                                                    |
+| GET    | `/health/ready`    | public           | checks the database                                         |
+| GET    | `/me`              | signed in        | profile and UPI IDs; creates the user on first call         |
+| PATCH  | `/me`              | signed in        | name, avatar (https), language, default currency            |
+| GET    | `/me/upi-ids`      | signed in        | primary first                                               |
+| POST   | `/me/upi-ids`      | signed in        | first one is primary; duplicates (any case) 409; at most 10 |
+| PATCH  | `/me/upi-ids/:id`  | own UPI IDs only | label; `isPrimary: true` moves primary                      |
+| DELETE | `/me/upi-ids/:id`  | own UPI IDs only | removing the primary promotes the oldest remaining          |
+| POST   | `/groups`          | signed in        | idempotent; caller becomes owner                            |
+| GET    | `/groups`          | signed in        | groups you currently belong to                              |
+| GET    | `/groups/:groupId` | group read       | group and members                                           |
+| PATCH  | `/groups/:groupId` | group write      | rename, currency, simplify; needs `version`                 |
 
 Request and response shapes are the zod schemas in `@speaksplit/api-types`.

@@ -13,6 +13,7 @@ import { GroupsController } from './groups/groups.controller.js';
 import { GroupsService } from './groups/groups.service.js';
 import { HealthController } from './health/health.controller.js';
 import { MeController } from './users/me.controller.js';
+import { ProfileService } from './users/profile.service.js';
 import { UsersService } from './users/users.service.js';
 
 @Module({
@@ -50,6 +51,7 @@ import { UsersService } from './users/users.service.js';
   controllers: [HealthController, MeController, GroupsController],
   providers: [
     UsersService,
+    ProfileService,
     GroupsService,
     {
       provide: JWKS,

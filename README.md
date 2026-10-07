@@ -75,8 +75,8 @@ Priority: **MVP** = first release, **Next** = soon after, **Later** = backlog.
 | Feature                                                                             | Priority |
 | ----------------------------------------------------------------------------------- | -------- |
 | Pay via a prefilled `upi://pay` link that opens GPay, PhonePe, Paytm or any UPI app | MVP      |
-| Record a payment (full or partial, UPI or cash)                                     | MVP      |
-| Payee confirms or disputes a recorded payment                                       | Next     |
+| Record a payment (UPI or cash); it counts straight away and clears the full amount  | MVP      |
+| Payee disputes a recorded payment                                                   | Next     |
 | Copy UPI ID and QR code fallbacks; "settle all" suggestions                         | Next     |
 | Reminders by push and a prefilled WhatsApp message                                  | Next     |
 | Attach a payment screenshot and extract the UPI reference                           | Later    |
@@ -229,13 +229,14 @@ pnpm test:int                           # database integration tests; needs TEST
   - [x] TypeORM entities mirroring the migration; shared request/response schemas
   - [x] Test that one user can't read or change another group's data
 - [ ] API features
-  - [ ] Profile and UPI IDs
+  - [x] Profile and UPI IDs (email and phone changes wait for a verified flow)
   - [ ] Groups: ~~create, list, view, rename (with optimistic locking), default currency~~; archive, delete
   - [ ] Friend-to-friend expenses
   - [ ] Invite links; join; remove members (blocked while they have a balance)
   - [ ] Expenses: create, edit, delete, with audit history
   - [ ] Balances per group and overall, with simplified debts
-  - [ ] Record a payment (UPI or cash, including paying a foreign-currency debt in INR)
+  - [ ] Record a payment (UPI or cash, including paying a foreign-currency debt in INR); counts
+        immediately; must clear the full amount owed
 - [ ] Text-to-split: `POST /expenses/parse` with name anonymisation and split-engine validation
 - [ ] Auth0 tenant: mobile app, API audience, email OTP and Google sign-in
 - [ ] Mobile app: login, groups, add expense (form and text with review), expense detail,
@@ -250,8 +251,13 @@ Decided:
 - **Leaving:** members who leave a group keep read access to its history; they can no longer
   add or change anything in it.
 
-Still open: whether recorded payments count immediately or wait for the payee to confirm,
-whether partial payments are allowed, and which AI provider to use.
+- **Payments count straight away.** Recording a payment updates balances immediately; the
+  payee doesn't have to confirm it (disputing one comes after the MVP).
+- **No partial payments.** A payment clears the whole amount one person owes another in that
+  currency: the amount in the suggested settle-up plan, or the direct debt when the group has
+  simplification turned off.
+
+Still open: which AI provider to use for text-to-split.
 
 ## After the MVP
 
