@@ -186,9 +186,8 @@ apps/
 packages/
   split-engine/   shared, dependency-free money, split and balance logic
   api-types/      zod schemas shared by the API and clients
-services/
-  go-service/     optional Go service
 deploy/           docker-compose, Helm, Argo CD, Terraform
+docs/             product plan and schema design
 ```
 
 ## Getting started
