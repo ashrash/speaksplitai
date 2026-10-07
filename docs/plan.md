@@ -326,7 +326,8 @@ A dependency-free TypeScript package used by the app, the web page and the API.
 - Distribute leftover minor units with the largest-remainder method: each person gets the whole-unit part of their exact share, and the leftover units go one each to the largest fractional remainders, ties to the earlier participant in a stable order. Everyone ends within one minor unit of their exact share.
 - Validate: splits sum exactly to the total; percentages sum to exactly 100; no negative shares.
 - Compute net balances from expenses and settlements, per currency.
-- Simplify debts per currency (greedy matching of the largest creditor and debtor; optional exact minimisation for small groups).
+- Without simplification, list who owes whom: within each expense, members who paid less than their share owe those who paid more, in proportion to the excess; debts are then netted per pair.
+- Simplify debts per currency: split members into the largest number of groups whose balances sum to zero (exact search for up to 16 people with a non-zero balance), then within each group the largest debtor pays the largest creditor until all are settled. That gives the minimum number of transfers; beyond 16 people it falls back to the greedy step alone (at most n - 1 transfers).
 
 **Testing**
 - Property-based tests (fast-check): for any inputs, splits sum to the total, each part is within one unit of its exact share, results are deterministic; balances sum to zero per currency.
@@ -476,7 +477,7 @@ Verify current pricing before committing to any of these.
 
 1. ~~**Monorepo scaffolding**, CI, Docker Compose~~
 2. ~~**Postgres schema and migrations**, with integration tests; multi-currency~~
-3. **Split engine + tests**: ~~money maths, currencies, rounding, split types~~; balances and simplification still to do
+3. ~~**Split engine + tests**: money maths, currencies, rounding, split types, balances, simplification~~ (itemised splits come with step 10)
 4. **API:** Auth0 JWT validation, group-scoped authorization, expenses, balances, with tests
 5. **Mobile app:** OIDC + PKCE login, groups, manual expenses, balances, UPI settle
 6. **Members and safety:** invites, add/remove, roles, block/unblock

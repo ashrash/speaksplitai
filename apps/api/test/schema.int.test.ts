@@ -1,4 +1,4 @@
-import { CURRENCIES } from '@speaksplit/split-engine';
+import { computeBalances, CURRENCIES, type Ledger, simplifyDebts } from '@speaksplit/split-engine';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type TestDatabase } from './db.js';
@@ -377,6 +377,107 @@ describe('multi-currency', () => {
       ),
     ).toBeNull();
     expect((await balances('IDR'))[f.members.a]![0]).toBe(3_333_333_332);
+  });
+});
+
+describe('split engine agrees with the database', () => {
+  it('computes the same per-currency balances as member_balances', async () => {
+    await tx(() => insertExpense());
+    await tx(() =>
+      insertExpense(
+        [
+          [f.members.b, 2000],
+          [f.members.c, 1000],
+        ],
+        { currency: 'USD', total: 3000 },
+      ),
+    );
+    await tx(() =>
+      client.query(
+        `insert into settlements (group_id, from_member_id, to_member_id, amount_minor, currency,
+                                  status, created_by, confirmed_by, confirmed_at)
+         values ($1, $2, $3, 1000, 'INR', 'confirmed', $4, $5, now()),
+                ($1, $6, $3, 500,  'USD', 'pending',   $7, null, null),
+                ($1, $6, $3, 300,  'INR', 'cancelled', $7, null, null)`,
+        [f.group, f.members.b, f.members.a, f.users.b, f.users.a, f.members.c, f.users.c],
+      ),
+    );
+
+    // Load the raw ledger the way the API will, and run the engine on it
+    const { rows: expenses } = await client.query<{ id: string; currency: string }>(
+      'select id, currency from expenses where group_id = $1 and deleted_at is null',
+      [f.group],
+    );
+    const ledger: Ledger = { expenses: [], settlements: [] };
+    for (const e of expenses) {
+      const payers = await client.query<{ member_id: string; paid_minor: string }>(
+        'select member_id, paid_minor from expense_payers where expense_id = $1',
+        [e.id],
+      );
+      const splits = await client.query<{ member_id: string; owed_minor: string }>(
+        'select member_id, owed_minor from expense_splits where expense_id = $1',
+        [e.id],
+      );
+      ledger.expenses.push({
+        currency: e.currency,
+        payers: payers.rows.map((r) => ({
+          memberId: r.member_id,
+          paidMinor: Number(r.paid_minor),
+        })),
+        splits: splits.rows.map((r) => ({
+          memberId: r.member_id,
+          owedMinor: Number(r.owed_minor),
+        })),
+      });
+    }
+    const { rows: settlements } = await client.query<{
+      currency: string;
+      from_member_id: string;
+      to_member_id: string;
+      amount_minor: string;
+      status: 'pending' | 'confirmed' | 'disputed' | 'cancelled';
+    }>(
+      'select currency, from_member_id, to_member_id, amount_minor, status from settlements where group_id = $1',
+      [f.group],
+    );
+    ledger.settlements = settlements.map((r) => ({
+      currency: r.currency,
+      fromMemberId: r.from_member_id,
+      toMemberId: r.to_member_id,
+      amountMinor: Number(r.amount_minor),
+      status: r.status,
+    }));
+
+    const { rows: view } = await client.query<Record<string, string>>(
+      `select member_id, currency, paid_minor, owed_minor, net_minor, pending_sent_minor, pending_received_minor
+       from member_balances
+       where group_id = $1 and (paid_minor <> 0 or owed_minor <> 0 or net_minor <> 0
+                                or pending_sent_minor <> 0 or pending_received_minor <> 0)
+       order by currency, member_id`,
+      [f.group],
+    );
+    const fromView = view.map((r) => ({
+      memberId: r.member_id,
+      currency: r.currency,
+      paidMinor: Number(r.paid_minor),
+      owedMinor: Number(r.owed_minor),
+      netMinor: Number(r.net_minor),
+      pendingSentMinor: Number(r.pending_sent_minor),
+      pendingReceivedMinor: Number(r.pending_received_minor),
+    }));
+    const fromEngine = computeBalances(ledger).filter(
+      (b) =>
+        b.paidMinor || b.owedMinor || b.netMinor || b.pendingSentMinor || b.pendingReceivedMinor,
+    );
+    const byKey = (
+      a: { currency: string; memberId: string },
+      b: { currency: string; memberId: string },
+    ) => a.currency.localeCompare(b.currency) || a.memberId.localeCompare(b.memberId);
+    expect(fromEngine.sort(byKey)).toEqual(fromView.sort(byKey));
+
+    // and the simplified plan from the view's balances settles everyone
+    const plan = simplifyDebts(fromView);
+    expect(plan.length).toBeGreaterThan(0);
   });
 });
 
