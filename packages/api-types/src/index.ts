@@ -436,3 +436,133 @@ export const expenseListResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type ExpenseListResponse = z.infer<typeof expenseListResponseSchema>;
+
+// ---- Balances and payments ----
+
+const memberRefSchema = z.object({ memberId: uuidSchema, name: z.string() });
+const currencyAmountSchema = z.object({ currency: currencySchema, netMinor: z.number().int() });
+
+export const groupBalancesResponseSchema = z.object({
+  /** Every member with a non-zero balance in some currency (net > 0: is owed; < 0: owes). */
+  members: z.array(
+    memberRefSchema.extend({
+      userId: uuidSchema.nullable(),
+      leftAt: z.string().nullable(),
+      balances: z.array(currencyAmountSchema),
+    }),
+  ),
+  /** The payments that settle everyone: simplified if the group has that on, else who owes whom. */
+  plan: z.array(
+    z.object({
+      from: memberRefSchema,
+      to: memberRefSchema,
+      currency: currencySchema,
+      amountMinor: z.number().int(),
+    }),
+  ),
+  simplified: z.boolean(),
+});
+export type GroupBalancesResponse = z.infer<typeof groupBalancesResponseSchema>;
+
+export const myBalancesResponseSchema = z.object({
+  /** Across all your groups and friends, per currency. */
+  totals: z.array(
+    z.object({
+      currency: currencySchema,
+      owedToMeMinor: z.number().int(),
+      iOweMinor: z.number().int(),
+      netMinor: z.number().int(),
+    }),
+  ),
+  /** Each group (and friend-to-friend group) where you have a non-zero balance. */
+  groups: z.array(
+    z.object({
+      groupId: uuidSchema,
+      name: z.string(),
+      type: z.string(),
+      /** For friend-to-friend groups: the other person. */
+      friend: z.object({ userId: uuidSchema, name: z.string() }).nullable(),
+      balances: z.array(currencyAmountSchema),
+    }),
+  ),
+});
+export type MyBalancesResponse = z.infer<typeof myBalancesResponseSchema>;
+
+export const PAYMENT_METHODS = ['upi', 'cash', 'bank_transfer', 'other'] as const;
+
+/**
+ * Records a payment that clears the full amount `from` owes `to` in `currency` (no partial
+ * payments). To pay a foreign-currency debt in rupees, also give what was actually sent.
+ */
+export const recordSettlementRequestSchema = z
+  .object({
+    fromMemberId: uuidSchema,
+    toMemberId: uuidSchema,
+    currency: currencySchema,
+    amountMinor: minorUnitsSchema.refine((n) => n > 0, 'must be positive'),
+    method: z.enum(PAYMENT_METHODS),
+    upiRef: z
+      .string()
+      .regex(/^[A-Za-z0-9]{6,35}$/, 'the UPI transaction reference (6-35 letters or digits)')
+      .optional(),
+    note: z.string().trim().max(500).optional(),
+    paidAmountMinor: minorUnitsSchema.refine((n) => n > 0, 'must be positive').optional(),
+    paidCurrency: currencySchema.optional(),
+  })
+  .refine((v) => (v.paidAmountMinor === undefined) === (v.paidCurrency === undefined), {
+    message: 'give both paidAmountMinor and paidCurrency, or neither',
+    path: ['paidCurrency'],
+  })
+  .refine((v) => v.paidCurrency !== v.currency, {
+    message: 'paidCurrency is only for paying in a different currency',
+    path: ['paidCurrency'],
+  })
+  .refine((v) => v.upiRef === undefined || v.method === 'upi', {
+    message: 'upiRef only applies to UPI payments',
+    path: ['upiRef'],
+  });
+export type RecordSettlementRequest = z.input<typeof recordSettlementRequestSchema>;
+
+export const settlementSchema = z.object({
+  id: uuidSchema,
+  from: memberRefSchema,
+  to: memberRefSchema,
+  currency: currencySchema,
+  amountMinor: z.number().int(),
+  paidCurrency: currencySchema.nullable(),
+  paidAmountMinor: z.number().int().nullable(),
+  method: z.enum(PAYMENT_METHODS),
+  upiRef: z.string().nullable(),
+  note: z.string().nullable(),
+  status: z.enum(['pending', 'confirmed', 'disputed', 'cancelled']),
+  createdBy: z.object({ userId: uuidSchema, name: z.string() }),
+  createdAt: z.string(),
+});
+export type SettlementView = z.infer<typeof settlementSchema>;
+
+export const listSettlementsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+  cursor: z.string().max(200).optional(),
+});
+
+export const settlementListResponseSchema = z.object({
+  items: z.array(settlementSchema),
+  nextCursor: z.string().nullable(),
+});
+export type SettlementListResponse = z.infer<typeof settlementListResponseSchema>;
+
+export const payLinkQuerySchema = z.object({
+  toMemberId: uuidSchema,
+  amountMinor: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
+
+export const payLinkResponseSchema = z.object({
+  payee: memberRefSchema,
+  /** The payee's primary UPI ID, or null if they have none (or are a placeholder). */
+  vpa: z.string().nullable(),
+  /** upi://pay link to open a UPI app, or null without a UPI ID. */
+  uri: z.string().nullable(),
+  /** The reference put in the link (`tr`); UPI apps show it on the payment. */
+  ref: z.string(),
+});
+export type PayLinkResponse = z.infer<typeof payLinkResponseSchema>;

@@ -6,3 +6,4 @@ export * from './money';
 export * from './simplify';
 export * from './splits';
 export * from './types';
+export * from './upi';
