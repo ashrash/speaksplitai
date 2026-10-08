@@ -13,7 +13,9 @@
     "migration:run": "typeorm migration:run -d dist/database/data-source.js",
     "migration:revert": "typeorm migration:revert -d dist/database/data-source.js",
     "migration:create": "typeorm migration:create",
-    "test:int": "vitest run --config vitest.int.config.ts"
+    "test:int": "vitest run --config vitest.int.config.ts",
+    "auth:check-token": "node --env-file-if-exists=../../.env dist/cli/check-token.js",
+    "auth:login": "node --env-file-if-exists=../../.env dist/cli/login.js"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.0",
