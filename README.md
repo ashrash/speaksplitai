@@ -249,6 +249,8 @@ pnpm test:int                           # database integration tests; needs TEST
         immediately; must clear the full amount owed; cancel; UPI pay links
 - [ ] Text-to-split: `POST /expenses/parse` with name anonymisation and split-engine validation
 - [ ] Auth0 tenant: mobile app, API audience, email OTP and Google sign-in
+  - [x] Setup guide, post-login Action (email, verified flag, name) and a token checker
+  - [ ] Create the dev and production tenants by following `deploy/auth0/README.md`
 - [ ] Mobile app: login, groups, add expense (form and text with review), expense detail,
       invites, profile, settle up via UPI
 - [ ] Ship to friends: VM with Docker Compose and TLS, nightly backups, Android APK, testing UPI

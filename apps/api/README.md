@@ -27,9 +27,11 @@ the profile, so an unverified email can't collide with another account.
 
 **Verified email.** Friend requests by email are matched against `users.email`, which the API
 keeps equal to the token's email when Auth0 marks it verified (and no other active account has
-it). Auth0 access tokens don't carry email by default: add a post-login Action that sets
-`email` and `email_verified` on the access token, under `AUTH0_CLAIM_NAMESPACE` (for example
-`https://speaksplit.app/email`). Phone numbers are never verified yet, so phone requests wait.
+it). Auth0 access tokens don't carry email or name by default: the post-login Action in
+[`deploy/auth0`](../../deploy/auth0/README.md) sets `email`, `email_verified` and `name` under
+`AUTH0_CLAIM_NAMESPACE` (for example `https://speaksplit.example.com/email`). Phone numbers are
+never verified yet, so phone requests wait. `pnpm auth:login` signs in against the tenant and
+checks the token the way the API does; `pnpm auth:check-token <token>` checks one you already have.
 
 **Group access.** Group routes use `@GroupAccess('read' | 'member' | 'write' | 'manage')` on the `:groupId` parameter:
 

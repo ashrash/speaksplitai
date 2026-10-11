@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { JWTPayload } from 'jose';
 import { DataSource } from 'typeorm';
+import { displayName, readClaim } from '../auth/claims.js';
 import type { Env } from '../config/env.js';
 import { User } from '../database/entities/index.js';
 
@@ -27,7 +28,7 @@ export class UsersService {
       await repo
         .createQueryBuilder()
         .insert()
-        .values({ authSubject: claims.sub, name: displayName(claims) })
+        .values({ authSubject: claims.sub, name: displayName(claims, this.namespace()) })
         .orIgnore() // two first requests at once: one inserts, the other reads it back
         .execute();
       user = await repo.findOneByOrFail({ authSubject: claims.sub });
@@ -59,17 +60,10 @@ export class UsersService {
   }
 
   private claim(claims: JWTPayload, name: string): unknown {
-    const ns = this.config.get('AUTH0_CLAIM_NAMESPACE', { infer: true });
-    return claims[name] ?? (ns ? claims[`${ns}${name}`] : undefined);
+    return readClaim(claims, this.namespace(), name);
   }
-}
 
-function displayName(claims: JWTPayload): string {
-  for (const key of ['name', 'nickname', 'given_name'] as const) {
-    const value = claims[key];
-    if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 80);
+  private namespace(): string | undefined {
+    return this.config.get('AUTH0_CLAIM_NAMESPACE', { infer: true });
   }
-  const email = claims.email;
-  if (typeof email === 'string' && email.includes('@')) return email.split('@')[0]!.slice(0, 80);
-  return 'New user';
 }
