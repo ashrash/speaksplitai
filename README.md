@@ -1,6 +1,6 @@
 # SpeakSplit Pay
 
-A Splitwise-style expense-splitting app built for India. Add an expense by typing a sentence,
+A Splitwise-style expense-splitting app. Add an expense by typing a sentence,
 speaking it, or photographing the bill; split it any way you like, exact to the smallest unit
 of the currency; and settle up through a prefilled UPI payment link. Trips abroad work too:
 expenses can be in any supported currency.
